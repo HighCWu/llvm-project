@@ -60,10 +60,7 @@ Result lldMain(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
 // Must be used along with LLD_HAS_DRIVERS. See examples in LLD unittests.
 #define LLD_ALL_DRIVERS                                                        \
   {                                                                            \
-    {lld::WinLink, &lld::coff::link}, {lld::Gnu, &lld::elf::link},             \
-        {lld::MinGW, &lld::mingw::link}, {lld::Darwin, &lld::macho::link}, {   \
-      lld::Wasm, &lld::wasm::link                                              \
-    }                                                                          \
+    { lld::Wasm, &lld::wasm::link }                                            \
   }
 
 #endif

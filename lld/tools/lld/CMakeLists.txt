@@ -27,10 +27,6 @@ endfunction()
 lld_target_link_libraries(lld
   PRIVATE
   lldCommon
-  lldCOFF
-  lldELF
-  lldMachO
-  lldMinGW
   lldWasm
   )
 
