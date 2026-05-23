@@ -9,6 +9,7 @@
 #include "llvm/ExecutionEngine/Orc/TargetProcess/ExecutorSharedMemoryMapperService.h"
 #include "llvm/Config/llvm-config.h" // for LLVM_ON_UNIX
 #include "llvm/ExecutionEngine/Orc/Shared/OrcRTBridge.h"
+#include "llvm/Config/config.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/WindowsError.h"
 #include <sstream>
@@ -16,12 +17,22 @@
 #if defined(LLVM_ON_UNIX)
 #include <errno.h>
 #include <fcntl.h>
+#ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h>
+#endif
 #if defined(__MVS__)
 #include "llvm/Support/BLAKE3.h"
 #include <sys/shm.h>
 #endif
 #include <unistd.h>
+#if defined(HAVE_SYS_MMAN_H) && defined(MAP_SHARED) && defined(PROT_NONE) &&     \
+    defined(PROT_READ) && defined(PROT_WRITE) && defined(PROT_EXEC)
+#define LLVM_SUPPORTS_POSIX_MMAP 1
+#else
+#define LLVM_SUPPORTS_POSIX_MMAP 0
+#endif
+#else
+#define LLVM_SUPPORTS_POSIX_MMAP 0
 #endif
 
 namespace llvm {
@@ -50,7 +61,8 @@ static DWORD getWindowsProtectionFlags(MemProt MP) {
 
 Expected<std::pair<ExecutorAddr, std::string>>
 ExecutorSharedMemoryMapperService::reserve(uint64_t Size) {
-#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__)) || defined(_WIN32)
+#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__) && LLVM_SUPPORTS_POSIX_MMAP) || \
+    defined(_WIN32)
 
 #if defined(LLVM_ON_UNIX)
 
@@ -130,6 +142,10 @@ ExecutorSharedMemoryMapperService::reserve(uint64_t Size) {
 
   return std::make_pair(ExecutorAddr::fromPtr(Addr),
                         std::move(SharedMemoryName));
+#elif defined(LLVM_ON_UNIX) && !defined(__ANDROID__)
+  return make_error<StringError>(
+      "SharedMemoryMapper requires POSIX mmap support on this platform",
+      inconvertibleErrorCode());
 #else
   return make_error<StringError>(
       "SharedMemoryMapper is not supported on this platform yet",
@@ -139,7 +155,8 @@ ExecutorSharedMemoryMapperService::reserve(uint64_t Size) {
 
 Expected<ExecutorAddr> ExecutorSharedMemoryMapperService::initialize(
     ExecutorAddr Reservation, tpctypes::SharedMemoryFinalizeRequest &FR) {
-#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__)) || defined(_WIN32)
+#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__) && LLVM_SUPPORTS_POSIX_MMAP) || \
+    defined(_WIN32)
 
   ExecutorAddr MinAddr(~0ULL);
 
@@ -195,6 +212,10 @@ Expected<ExecutorAddr> ExecutorSharedMemoryMapperService::initialize(
 
   return MinAddr;
 
+#elif defined(LLVM_ON_UNIX) && !defined(__ANDROID__)
+  return make_error<StringError>(
+      "SharedMemoryMapper requires POSIX mmap support on this platform",
+      inconvertibleErrorCode());
 #else
   return make_error<StringError>(
       "SharedMemoryMapper is not supported on this platform yet",
@@ -233,7 +254,8 @@ Error ExecutorSharedMemoryMapperService::deinitialize(
 
 Error ExecutorSharedMemoryMapperService::release(
     const std::vector<ExecutorAddr> &Bases) {
-#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__)) || defined(_WIN32)
+#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__) && LLVM_SUPPORTS_POSIX_MMAP) || \
+    defined(_WIN32)
   Error Err = Error::success();
 
   for (auto Base : Bases) {
@@ -288,6 +310,10 @@ Error ExecutorSharedMemoryMapperService::release(
   }
 
   return Err;
+#elif defined(LLVM_ON_UNIX) && !defined(__ANDROID__)
+  return make_error<StringError>(
+      "SharedMemoryMapper requires POSIX mmap support on this platform",
+      inconvertibleErrorCode());
 #else
   return make_error<StringError>(
       "SharedMemoryMapper is not supported on this platform yet",

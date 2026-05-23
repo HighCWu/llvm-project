@@ -859,6 +859,13 @@ std::error_code mapped_file_region::init(int FD, uint64_t Offset,
                                          mapmode Mode) {
   assert(Size != 0);
 
+#if !defined(MAP_SHARED) || !defined(MAP_PRIVATE) || !defined(PROT_READ) ||    \
+    !defined(PROT_WRITE)
+  (void)FD;
+  (void)Offset;
+  (void)Mode;
+  return make_error_code(errc::function_not_supported);
+#else
   int flags = (Mode == readwrite) ? MAP_SHARED : MAP_PRIVATE;
   int prot = (Mode == readonly) ? PROT_READ : (PROT_READ | PROT_WRITE);
 #if defined(MAP_NORESERVE)
@@ -888,6 +895,7 @@ std::error_code mapped_file_region::init(int FD, uint64_t Offset,
   if (Mapping == MAP_FAILED)
     return errnoAsErrorCode();
   return std::error_code();
+#endif
 }
 
 mapped_file_region::mapped_file_region(int fd, mapmode mode, size_t length,
@@ -902,8 +910,14 @@ mapped_file_region::mapped_file_region(int fd, mapmode mode, size_t length,
 }
 
 void mapped_file_region::unmapImpl() {
+#if !defined(MAP_SHARED) || !defined(MAP_PRIVATE) || !defined(PROT_READ) ||    \
+    !defined(PROT_WRITE)
+  (void)Mapping;
+  (void)Size;
+#else
   if (Mapping)
     ::munmap(Mapping, Size);
+#endif
 }
 
 std::error_code mapped_file_region::sync() const {
@@ -916,12 +930,17 @@ void mapped_file_region::dontNeedImpl() {
   assert(Mode == mapped_file_region::readonly);
   if (!Mapping)
     return;
+#if !defined(POSIX_MADV_DONTNEED) && !defined(MADV_DONTNEED)
+  (void)Size;
+  return;
+#else
 #if defined(__MVS__) || defined(_AIX)
     // If we don't have madvise, or it isn't beneficial, treat this as a no-op.
 #elif defined(POSIX_MADV_DONTNEED)
   ::posix_madvise(Mapping, Size, POSIX_MADV_DONTNEED);
 #else
   ::madvise(Mapping, Size, MADV_DONTNEED);
+#endif
 #endif
 }
 

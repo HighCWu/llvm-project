@@ -18,8 +18,17 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Valgrind.h"
 
+#include <system_error>
+
 #ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h>
+#endif
+
+#if defined(HAVE_SYS_MMAN_H) && defined(MAP_PRIVATE) && defined(PROT_READ) &&   \
+    defined(PROT_WRITE) && defined(PROT_EXEC) && defined(PROT_NONE)
+#define LLVM_SUPPORTS_POSIX_MMAP 1
+#else
+#define LLVM_SUPPORTS_POSIX_MMAP 0
 #endif
 
 #ifdef __APPLE__
@@ -36,6 +45,7 @@ extern "C" void sys_icache_invalidate(const void *Addr, size_t len);
 extern "C" void __clear_cache(void *, void *);
 #endif
 
+#if LLVM_SUPPORTS_POSIX_MMAP
 static int getPosixProtectionFlags(unsigned Flags) {
   switch (Flags & llvm::sys::Memory::MF_RWE_MASK) {
   case llvm::sys::Memory::MF_READ:
@@ -66,6 +76,7 @@ static int getPosixProtectionFlags(unsigned Flags) {
   // Provide a default return value as required by some compilers.
   return PROT_NONE;
 }
+#endif
 
 namespace llvm {
 namespace sys {
@@ -77,6 +88,11 @@ MemoryBlock Memory::allocateMappedMemory(size_t NumBytes,
   if (NumBytes == 0)
     return MemoryBlock();
 
+#if !LLVM_SUPPORTS_POSIX_MMAP
+  (void)NearBlock;
+  EC = std::make_error_code(std::errc::function_not_supported);
+  return MemoryBlock();
+#else
   // On platforms that have it, we can use MAP_ANON to get a memory-mapped
   // page without file backing, but we need a fallback of opening /dev/zero
   // for strictly POSIX platforms instead.
@@ -146,12 +162,16 @@ MemoryBlock Memory::allocateMappedMemory(size_t NumBytes,
   }
 
   return Result;
+#endif
 }
 
 std::error_code Memory::releaseMappedMemory(MemoryBlock &M) {
   if (M.Address == nullptr || M.AllocatedSize == 0)
     return std::error_code();
 
+#if !LLVM_SUPPORTS_POSIX_MMAP
+  return std::make_error_code(std::errc::function_not_supported);
+#else
   if (0 != ::munmap(M.Address, M.AllocatedSize))
     return errnoAsErrorCode();
 
@@ -159,6 +179,7 @@ std::error_code Memory::releaseMappedMemory(MemoryBlock &M) {
   M.AllocatedSize = 0;
 
   return std::error_code();
+#endif
 }
 
 std::error_code Memory::protectMappedMemory(const MemoryBlock &M,
@@ -167,6 +188,10 @@ std::error_code Memory::protectMappedMemory(const MemoryBlock &M,
   if (M.Address == nullptr || M.AllocatedSize == 0)
     return std::error_code();
 
+#if !LLVM_SUPPORTS_POSIX_MMAP
+  (void)Flags;
+  return std::make_error_code(std::errc::function_not_supported);
+#else
   if (!Flags)
     return std::error_code(EINVAL, std::generic_category());
 
@@ -202,6 +227,7 @@ std::error_code Memory::protectMappedMemory(const MemoryBlock &M,
     Memory::InvalidateInstructionCache(M.Address, M.AllocatedSize);
 
   return std::error_code();
+#endif
 }
 
 /// InvalidateInstructionCache - Before the JIT can run a block of code

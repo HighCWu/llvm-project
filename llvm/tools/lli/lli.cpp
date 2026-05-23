@@ -1204,7 +1204,7 @@ static void disallowOrcOptions() {
 }
 
 static Expected<std::unique_ptr<orc::ExecutorProcessControl>> launchRemote() {
-#ifndef LLVM_ON_UNIX
+#if !defined(LLVM_ON_UNIX) || defined(__wasm__)
   llvm_unreachable("launchRemote not supported on non-Unix platforms");
 #else
   int PipeFD[2][2];

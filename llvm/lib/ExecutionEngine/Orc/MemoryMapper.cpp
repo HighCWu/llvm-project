@@ -10,18 +10,30 @@
 
 #include "llvm/Config/llvm-config.h" // for LLVM_ON_UNIX
 #include "llvm/ExecutionEngine/Orc/Shared/OrcRTBridge.h"
+#include "llvm/Config/config.h"
 #include "llvm/Support/WindowsError.h"
 
 #if defined(LLVM_ON_UNIX) && !defined(__ANDROID__)
 #include <fcntl.h>
+#if defined(HAVE_SYS_MMAN_H)
 #include <sys/mman.h>
+#endif
 #if defined(__MVS__)
 #include "llvm/Support/BLAKE3.h"
 #include <sys/shm.h>
 #endif
 #include <unistd.h>
+#if defined(HAVE_SYS_MMAN_H) && defined(MAP_SHARED) && defined(PROT_READ) &&     \
+    defined(PROT_WRITE) && defined(PROT_EXEC)
+#define LLVM_SUPPORTS_POSIX_MMAP 1
+#else
+#define LLVM_SUPPORTS_POSIX_MMAP 0
+#endif
 #elif defined(_WIN32)
 #include <windows.h>
+#define LLVM_SUPPORTS_POSIX_MMAP 0
+#else
+#define LLVM_SUPPORTS_POSIX_MMAP 0
 #endif
 
 namespace llvm {
@@ -195,16 +207,21 @@ InProcessMemoryMapper::~InProcessMemoryMapper() {
 // SharedMemoryMapper
 
 SharedMemoryMapper::SharedMemoryMapper(ExecutorProcessControl &EPC,
-                                       SymbolAddrs SAs, size_t PageSize)
+                                        SymbolAddrs SAs, size_t PageSize)
     : EPC(EPC), SAs(SAs), PageSize(PageSize) {
-#if (!defined(LLVM_ON_UNIX) || defined(__ANDROID__)) && !defined(_WIN32)
+#if !defined(_WIN32) &&                                                     \
+    !(defined(LLVM_ON_UNIX) && !defined(__ANDROID__) &&                     \
+      (defined(__MVS__) || LLVM_SUPPORTS_POSIX_MMAP))
   llvm_unreachable("SharedMemoryMapper is not supported on this platform yet");
 #endif
 }
 
+
 Expected<std::unique_ptr<SharedMemoryMapper>>
 SharedMemoryMapper::Create(ExecutorProcessControl &EPC, SymbolAddrs SAs) {
-#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__)) || defined(_WIN32)
+#if defined(_WIN32) ||                                                           \
+    (defined(LLVM_ON_UNIX) && !defined(__ANDROID__) &&                           \
+     (defined(__MVS__) || LLVM_SUPPORTS_POSIX_MMAP))
   auto PageSize = sys::Process::getPageSize();
   if (!PageSize)
     return PageSize.takeError();
@@ -218,11 +235,14 @@ SharedMemoryMapper::Create(ExecutorProcessControl &EPC, SymbolAddrs SAs) {
 }
 
 void SharedMemoryMapper::reserve(size_t NumBytes,
-                                 OnReservedFunction OnReserved) {
-#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__)) || defined(_WIN32)
+                                  OnReservedFunction OnReserved) {
+#if defined(_WIN32) ||                                                           \
+    (defined(LLVM_ON_UNIX) && !defined(__ANDROID__) &&                           \
+     (defined(__MVS__) || LLVM_SUPPORTS_POSIX_MMAP))
 
   int SharedMemoryId = -1;
   EPC.callSPSWrapperAsync<
+
       rt::SPSExecutorSharedMemoryMapperServiceReserveSignature>(
       SAs.Reserve,
       [this, NumBytes, OnReserved = std::move(OnReserved), SharedMemoryId](
@@ -261,8 +281,9 @@ void SharedMemoryMapper::reserve(size_t NumBytes,
           return OnReserved(errorCodeToError(
               std::error_code(errno, std::generic_category())));
         }
-#else
-        int SharedMemoryFile = shm_open(SharedMemoryName.c_str(), O_RDWR, 0700);
+#elif LLVM_SUPPORTS_POSIX_MMAP
+        int SharedMemoryFile =
+            shm_open(SharedMemoryName.c_str(), O_RDWR, 0700);
         if (SharedMemoryFile < 0) {
           return OnReserved(errorCodeToError(errnoAsErrorCode()));
         }
@@ -277,7 +298,12 @@ void SharedMemoryMapper::reserve(size_t NumBytes,
         }
 
         close(SharedMemoryFile);
+#else
+        return OnReserved(make_error<StringError>(
+            "SharedMemoryMapper requires POSIX mmap support on this platform",
+            inconvertibleErrorCode()));
 #endif
+
 
 #elif defined(_WIN32)
 
@@ -308,6 +334,10 @@ void SharedMemoryMapper::reserve(size_t NumBytes,
       },
       SAs.Instance, static_cast<uint64_t>(NumBytes));
 
+#elif defined(LLVM_ON_UNIX) && !defined(__ANDROID__)
+  OnReserved(make_error<StringError>(
+      "SharedMemoryMapper requires POSIX mmap support on this platform",
+      inconvertibleErrorCode()));
 #else
   OnReserved(make_error<StringError>(
       "SharedMemoryMapper is not supported on this platform yet",
@@ -388,9 +418,12 @@ void SharedMemoryMapper::deinitialize(
 }
 
 void SharedMemoryMapper::release(ArrayRef<ExecutorAddr> Bases,
-                                 OnReleasedFunction OnReleased) {
-#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__)) || defined(_WIN32)
+                                  OnReleasedFunction OnReleased) {
+#if defined(_WIN32) ||                                                           \
+    (defined(LLVM_ON_UNIX) && !defined(__ANDROID__) &&                           \
+     (defined(__MVS__) || LLVM_SUPPORTS_POSIX_MMAP))
   Error Err = Error::success();
+
 
   {
     std::lock_guard<std::mutex> Lock(Mutex);
@@ -403,9 +436,15 @@ void SharedMemoryMapper::release(ArrayRef<ExecutorAddr> Bases,
       if (shmdt(Reservations[Base].LocalAddr) < 0 ||
           shmctl(Reservations[Base].SharedMemoryId, IPC_RMID, NULL) < 0)
         Err = joinErrors(std::move(Err), errorCodeToError(errnoAsErrorCode()));
-#else
+#elif LLVM_SUPPORTS_POSIX_MMAP
       if (munmap(Reservations[Base].LocalAddr, Reservations[Base].Size) != 0)
         Err = joinErrors(std::move(Err), errorCodeToError(errnoAsErrorCode()));
+#else
+      Err = joinErrors(
+          std::move(Err),
+          make_error<StringError>(
+              "SharedMemoryMapper requires POSIX mmap support on this platform",
+              inconvertibleErrorCode()));
 #endif
 
 #elif defined(_WIN32)
@@ -434,6 +473,10 @@ void SharedMemoryMapper::release(ArrayRef<ExecutorAddr> Bases,
         return OnReleased(joinErrors(std::move(Err), std::move(Result)));
       },
       SAs.Instance, Bases);
+#elif defined(LLVM_ON_UNIX) && !defined(__ANDROID__)
+  OnReleased(make_error<StringError>(
+      "SharedMemoryMapper requires POSIX mmap support on this platform",
+      inconvertibleErrorCode()));
 #else
   OnReleased(make_error<StringError>(
       "SharedMemoryMapper is not supported on this platform yet",
@@ -449,8 +492,10 @@ SharedMemoryMapper::~SharedMemoryMapper() {
 
 #if defined(__MVS__)
     shmdt(R.second.LocalAddr);
-#else
+#elif LLVM_SUPPORTS_POSIX_MMAP
     munmap(R.second.LocalAddr, R.second.Size);
+#else
+    (void)R;
 #endif
 
 #elif defined(_WIN32)

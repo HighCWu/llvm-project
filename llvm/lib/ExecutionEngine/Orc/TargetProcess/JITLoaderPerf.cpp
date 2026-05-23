@@ -14,6 +14,7 @@
 
 #include "llvm/ExecutionEngine/Orc/Shared/PerfSharedStructs.h"
 
+#include "llvm/Config/config.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -23,10 +24,23 @@
 #include <mutex>
 #include <optional>
 
-#ifdef __linux__
+#if defined(__linux__)
 
+#ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h> // mmap()
+#endif
 #include <time.h>     // clock_gettime(), time(), localtime_r() */
+
+#if defined(HAVE_SYS_MMAN_H) && defined(MAP_PRIVATE) && defined(PROT_READ) &&   \
+    defined(PROT_WRITE) && defined(PROT_EXEC) && defined(PROT_NONE)
+#define LLVM_SUPPORTS_POSIX_MMAP 1
+#else
+#define LLVM_SUPPORTS_POSIX_MMAP 0
+#endif
+
+#endif
+
+#if defined(__linux__) && LLVM_SUPPORTS_POSIX_MMAP
 
 #define DEBUG_TYPE "orc"
 
@@ -417,6 +431,42 @@ llvm_orc_registerJITLoaderPerfEnd(const char *ArgData, size_t ArgSize) {
   return WrapperFunction<SPSError()>::handle(ArgData, ArgSize,
                                              registerJITLoaderPerfEndImpl)
       .release();
+}
+
+#elif defined(__linux__)
+
+using namespace llvm;
+using namespace llvm::orc;
+
+static Error missingMMap() {
+  using namespace llvm;
+  return llvm::make_error<StringError>(
+      "perf JIT support requires POSIX mmap on this platform",
+      inconvertibleErrorCode());
+}
+
+static Error missingMMapBatch(PerfJITRecordBatch &Batch) {
+  return missingMMap();
+}
+
+extern "C" llvm::orc::shared::CWrapperFunctionResult
+llvm_orc_registerJITLoaderPerfImpl(const char *Data, uint64_t Size) {
+  using namespace shared;
+  return WrapperFunction<SPSError(SPSPerfJITRecordBatch)>::handle(
+             Data, Size, missingMMapBatch)
+      .release();
+}
+
+extern "C" llvm::orc::shared::CWrapperFunctionResult
+llvm_orc_registerJITLoaderPerfStart(const char *Data, uint64_t Size) {
+  using namespace shared;
+  return WrapperFunction<SPSError()>::handle(Data, Size, missingMMap).release();
+}
+
+extern "C" llvm::orc::shared::CWrapperFunctionResult
+llvm_orc_registerJITLoaderPerfEnd(const char *Data, uint64_t Size) {
+  using namespace shared;
+  return WrapperFunction<SPSError()>::handle(Data, Size, missingMMap).release();
 }
 
 #else

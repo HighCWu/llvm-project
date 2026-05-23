@@ -256,6 +256,17 @@ static bool Execute(ProcessInfo &PI, StringRef Program,
   }
 #endif // HAVE_POSIX_SPAWN
 
+#if !defined(HAVE_FORK)
+  (void)Args;
+  (void)Redirects;
+  (void)MemoryLimit;
+  (void)PI;
+  (void)Env;
+  (void)DetachProcess;
+  if (ErrMsg)
+    *ErrMsg = "fork is not available on this target";
+  return false;
+#else
   // Create a child process.
   int child = fork();
   switch (child) {
@@ -329,6 +340,7 @@ static bool Execute(ProcessInfo &PI, StringRef Program,
   PI.Process = child;
 
   return true;
+#endif
 }
 
 namespace llvm {

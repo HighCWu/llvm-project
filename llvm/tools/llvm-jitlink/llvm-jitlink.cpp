@@ -899,7 +899,7 @@ static Error loadDylibs(Session &S) {
 }
 
 static Expected<std::unique_ptr<ExecutorProcessControl>> launchExecutor() {
-#ifndef LLVM_ON_UNIX
+#if !defined(LLVM_ON_UNIX) || defined(__wasm__)
   // FIXME: Add support for Windows.
   return make_error<StringError>("-" + OutOfProcessExecutor.ArgStr +
                                      " not supported on non-unix platforms",
