@@ -18,6 +18,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/VirtualFileSystem.h"
+#include <utility>
 
 using namespace clang::driver;
 using namespace clang::driver::tools;
@@ -116,36 +117,40 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   const char *Crt1;
   const char *Entry = nullptr;
 
-  // When -shared is specified, use the reactor exec model unless
-  // specified otherwise.
-  if (Args.hasArg(options::OPT_shared))
-    IsCommand = false;
-
-  if (const Arg *A = Args.getLastArg(options::OPT_mexec_model_EQ)) {
-    StringRef CM = A->getValue();
-    if (CM == "command") {
-      IsCommand = true;
-    } else if (CM == "reactor") {
-      IsCommand = false;
-    } else {
-      ToolChain.getDriver().Diag(diag::err_drv_invalid_argument_to_option)
-          << CM << A->getOption().getName();
-    }
-  }
-
-  if (IsCommand) {
-    // If crt1-command.o exists, it supports new-style commands, so use it.
-    // Otherwise, use the old crt1.o. This is a temporary transition measure.
-    // Once WASI libc no longer needs to support LLVM versions which lack
-    // support for new-style command, it can make crt1.o the same as
-    // crt1-command.o. And once LLVM no longer needs to support WASI libc
-    // versions before that, it can switch to using crt1-command.o.
+  if (ToolChain.getTriple().isOSLinux()) {
     Crt1 = "crt1.o";
-    if (ToolChain.GetFilePath("crt1-command.o") != "crt1-command.o")
-      Crt1 = "crt1-command.o";
   } else {
-    Crt1 = "crt1-reactor.o";
-    Entry = "_initialize";
+    // When -shared is specified, use the reactor exec model unless
+    // specified otherwise.
+    if (Args.hasArg(options::OPT_shared))
+      IsCommand = false;
+
+    if (const Arg *A = Args.getLastArg(options::OPT_mexec_model_EQ)) {
+      StringRef CM = A->getValue();
+      if (CM == "command") {
+        IsCommand = true;
+      } else if (CM == "reactor") {
+        IsCommand = false;
+      } else {
+        ToolChain.getDriver().Diag(diag::err_drv_invalid_argument_to_option)
+            << CM << A->getOption().getName();
+      }
+    }
+
+    if (IsCommand) {
+      // If crt1-command.o exists, it supports new-style commands, so use it.
+      // Otherwise, use the old crt1.o. This is a temporary transition measure.
+      // Once WASI libc no longer needs to support LLVM versions which lack
+      // support for new-style command, it can make crt1.o the same as
+      // crt1-command.o. And once LLVM no longer needs to support WASI libc
+      // versions before that, it can switch to using crt1-command.o.
+      Crt1 = "crt1.o";
+      if (ToolChain.GetFilePath("crt1-command.o") != "crt1-command.o")
+        Crt1 = "crt1-command.o";
+    } else {
+      Crt1 = "crt1-reactor.o";
+      Entry = "_initialize";
+    }
   }
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles))
@@ -262,8 +267,17 @@ WebAssembly::WebAssembly(const Driver &D, const llvm::Triple &Triple,
       // bitcode format is not stable.
       auto Dir = AppendLTOLibDir(SysRoot + "/lib/" + MultiarchTriple);
       getFilePaths().push_back(Dir);
+      if (getTriple().isOSLinux()) {
+        auto UsrDir = AppendLTOLibDir(SysRoot + "/usr/lib/" + MultiarchTriple);
+        getFilePaths().push_back(UsrDir);
+      }
     }
     getFilePaths().push_back(SysRoot + "/lib/" + MultiarchTriple);
+    if (getTriple().isOSLinux()) {
+      getFilePaths().push_back(SysRoot + "/usr/lib/" + MultiarchTriple);
+      getFilePaths().push_back(SysRoot + "/usr/lib");
+    }
+    getFilePaths().push_back(SysRoot + "/lib");
   }
 
   if (getTriple().getOS() == llvm::Triple::WASI) {
@@ -473,6 +487,8 @@ WebAssembly::GetCXXStdlibType(const ArgList &Args) const {
       getDriver().Diag(diag::err_drv_invalid_stdlib_name)
           << A->getAsString(Args);
   }
+  if (getTriple().isOSLinux())
+    return ToolChain::CST_Libstdcxx;
   return ToolChain::CST_Libcxx;
 }
 
@@ -483,10 +499,15 @@ void WebAssembly::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
 
   const Driver &D = getDriver();
 
-  if (!DriverArgs.hasArg(options::OPT_nobuiltininc)) {
-    SmallString<128> P(D.ResourceDir);
-    llvm::sys::path::append(P, "include");
-    addSystemInclude(DriverArgs, CC1Args, P);
+  const bool UseBuiltinIncludes =
+      !DriverArgs.hasArg(options::OPT_nobuiltininc);
+
+  SmallString<128> ResourceDirInclude(D.ResourceDir);
+  llvm::sys::path::append(ResourceDirInclude, "include");
+
+  if (UseBuiltinIncludes &&
+      (!getTriple().isMusl() || DriverArgs.hasArg(options::OPT_nostdlibinc))) {
+    addSystemInclude(DriverArgs, CC1Args, ResourceDirInclude);
   }
 
   if (DriverArgs.hasArg(options::OPT_nostdlibinc))
@@ -505,12 +526,24 @@ void WebAssembly::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
     return;
   }
 
-  if (getTriple().getOS() != llvm::Triple::UnknownOS) {
-    const std::string MultiarchTriple =
-        getMultiarchTriple(D, getTriple(), D.SysRoot);
-    addSystemInclude(DriverArgs, CC1Args, D.SysRoot + "/include/" + MultiarchTriple);
-  }
+  const bool IsKnownOs = getTriple().getOS() != llvm::Triple::UnknownOS;
+  std::string MultiarchTriple;
+  if (IsKnownOs)
+    MultiarchTriple = getMultiarchTriple(D, getTriple(), D.SysRoot);
+
+  if (IsKnownOs)
+    addSystemInclude(DriverArgs, CC1Args,
+                     D.SysRoot + "/include/" + MultiarchTriple);
+  if (getTriple().isOSLinux() && IsKnownOs)
+    addSystemInclude(DriverArgs, CC1Args,
+                     D.SysRoot + "/usr/include/" + MultiarchTriple);
+
   addSystemInclude(DriverArgs, CC1Args, D.SysRoot + "/include");
+  if (getTriple().isOSLinux())
+    addSystemInclude(DriverArgs, CC1Args, D.SysRoot + "/usr/include");
+
+  if (UseBuiltinIncludes && getTriple().isMusl())
+    addSystemInclude(DriverArgs, CC1Args, ResourceDirInclude);
 }
 
 void WebAssembly::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
@@ -571,12 +604,23 @@ void WebAssembly::addLibCxxIncludePaths(
     llvm::opt::ArgStringList &CC1Args) const {
   const Driver &D = getDriver();
   std::string SysRoot = computeSysRoot();
-  std::string LibPath = SysRoot + "/include";
+  auto MakeIncludeRoot = [&]() -> std::pair<std::string, std::string> {
+    std::string Primary = SysRoot + "/include";
+    if (getTriple().isOSLinux())
+      return {SysRoot + "/usr/include", Primary};
+    return {Primary, Primary};
+  };
+  auto [PrimaryInclude, SecondaryInclude] = MakeIncludeRoot();
+  std::string LibPath = PrimaryInclude;
   const std::string MultiarchTriple =
       getMultiarchTriple(D, getTriple(), SysRoot);
   bool IsKnownOs = (getTriple().getOS() != llvm::Triple::UnknownOS);
 
   std::string Version = detectLibcxxVersion(LibPath);
+  if (Version.empty() && PrimaryInclude != SecondaryInclude) {
+    LibPath = SecondaryInclude;
+    Version = detectLibcxxVersion(LibPath);
+  }
   if (Version.empty())
     return;
 
@@ -588,6 +632,11 @@ void WebAssembly::addLibCxxIncludePaths(
 
   // Second add the generic one.
   addSystemInclude(DriverArgs, CC1Args, LibPath + "/c++/" + Version);
+  if (PrimaryInclude != SecondaryInclude && LibPath != PrimaryInclude) {
+    addSystemInclude(DriverArgs, CC1Args,
+                     PrimaryInclude + "/" + MultiarchTriple + "/c++/" + Version);
+    addSystemInclude(DriverArgs, CC1Args, PrimaryInclude + "/c++/" + Version);
+  }
 }
 
 void WebAssembly::addLibStdCXXIncludePaths(
@@ -599,7 +648,14 @@ void WebAssembly::addLibStdCXXIncludePaths(
   // to how we do it for libc++.
   const Driver &D = getDriver();
   std::string SysRoot = computeSysRoot();
-  std::string LibPath = SysRoot + "/include";
+  auto MakeIncludeRoot = [&]() -> std::pair<std::string, std::string> {
+    std::string Primary = SysRoot + "/include";
+    if (getTriple().isOSLinux())
+      return {SysRoot + "/usr/include", Primary};
+    return {Primary, Primary};
+  };
+  auto [PrimaryInclude, SecondaryInclude] = MakeIncludeRoot();
+  std::string LibPath = PrimaryInclude;
   const std::string MultiarchTriple =
       getMultiarchTriple(D, getTriple(), SysRoot);
   bool IsKnownOs = (getTriple().getOS() != llvm::Triple::UnknownOS);
@@ -625,6 +681,29 @@ void WebAssembly::addLibStdCXXIncludePaths(
       Version = MaxVersion.Text;
   }
 
+  if (Version.empty() && PrimaryInclude != SecondaryInclude) {
+    LibPath = SecondaryInclude;
+    // repeat the search on the fallback location
+    {
+      std::error_code EC;
+      Generic_GCC::GCCVersion MaxVersion =
+          Generic_GCC::GCCVersion::Parse("0.0.0");
+      SmallString<128> Path(LibPath);
+      llvm::sys::path::append(Path, "c++");
+      for (llvm::vfs::directory_iterator LI = getVFS().dir_begin(Path, EC), LE;
+           !EC && LI != LE; LI = LI.increment(EC)) {
+        StringRef VersionText = llvm::sys::path::filename(LI->path());
+        if (VersionText[0] != 'v') {
+          auto ParsedVersion = Generic_GCC::GCCVersion::Parse(VersionText);
+          if (ParsedVersion > MaxVersion)
+            MaxVersion = ParsedVersion;
+        }
+      }
+      if (MaxVersion.Major > 0)
+        Version = MaxVersion.Text;
+    }
+  }
+
   if (Version.empty())
     return;
 
@@ -638,4 +717,15 @@ void WebAssembly::addLibStdCXXIncludePaths(
   addSystemInclude(DriverArgs, CC1Args, LibPath + "/c++/" + Version);
   // Third the backward one.
   addSystemInclude(DriverArgs, CC1Args, LibPath + "/c++/" + Version + "/backward");
+
+  if (PrimaryInclude != SecondaryInclude && LibPath != PrimaryInclude) {
+    if (IsKnownOs) {
+      addSystemInclude(DriverArgs, CC1Args,
+                       PrimaryInclude + "/c++/" + Version + "/" + MultiarchTriple);
+    }
+    addSystemInclude(DriverArgs, CC1Args,
+                     PrimaryInclude + "/c++/" + Version);
+    addSystemInclude(DriverArgs, CC1Args,
+                     PrimaryInclude + "/c++/" + Version + "/backward");
+  }
 }

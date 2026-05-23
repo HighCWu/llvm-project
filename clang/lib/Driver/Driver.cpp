@@ -6856,7 +6856,11 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
       break;
     case llvm::Triple::Linux:
     case llvm::Triple::ELFIAMCU:
-      if (Target.getArch() == llvm::Triple::hexagon)
+      if ((Target.getArch() == llvm::Triple::wasm32 ||
+           Target.getArch() == llvm::Triple::wasm64) &&
+          Target.isOSBinFormatWasm())
+        TC = std::make_unique<toolchains::WebAssembly>(*this, Target, Args);
+      else if (Target.getArch() == llvm::Triple::hexagon)
         TC = std::make_unique<toolchains::HexagonToolChain>(*this, Target,
                                                              Args);
       else if ((Target.getVendor() == llvm::Triple::MipsTechnologies) &&
