@@ -38,6 +38,7 @@
 // and the next 48 bytes as executable.  Since the stack is normally rw-
 // that means changing the protection on those page(s) to rwx.
 
+#ifndef __wasm__
 COMPILER_RT_ABI void __enable_execute_stack(void *addr) {
 
 #if _WIN32
@@ -65,3 +66,4 @@ COMPILER_RT_ABI void __enable_execute_stack(void *addr) {
   (void)mprotect((void *)startPage, length, PROT_READ | PROT_WRITE | PROT_EXEC);
 #endif
 }
+#endif
