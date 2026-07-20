@@ -68,7 +68,8 @@ enum CCMangling {
   CCM_RegCall,
   CCM_Vector,
   CCM_Std,
-  CCM_WasmMainArgcArgv
+  CCM_WasmMainArgcArgv,
+  CCM_WasmMainArgcArgvEnvp
 };
 
 static bool isExternC(const NamedDecl *ND) {
@@ -84,12 +85,16 @@ static CCMangling getCallingConvMangling(const ASTContext &Context,
   const TargetInfo &TI = Context.getTargetInfo();
   const llvm::Triple &Triple = TI.getTriple();
 
-  // On wasm, the argc/argv form of "main" is renamed so that the startup code
-  // can call it with the correct function signature.
+  // On wasm, forms of "main" which take arguments are renamed so that startup
+  // code can call them with the correct function signature.
   if (Triple.isWasm())
     if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(ND))
-      if (FD->isMain() && FD->getNumParams() == 2)
-        return CCM_WasmMainArgcArgv;
+      if (FD->isMain()) {
+        if (FD->getNumParams() == 2)
+          return CCM_WasmMainArgcArgv;
+        if (FD->getNumParams() == 3)
+          return CCM_WasmMainArgcArgvEnvp;
+      }
 
   if (!TI.shouldUseMicrosoftCCforMangling())
     return CCM_Other;
@@ -231,6 +236,10 @@ void MangleContext::mangleName(GlobalDecl GD, raw_ostream &Out) {
 
   if (CC == CCM_WasmMainArgcArgv) {
     Out << "__main_argc_argv";
+    return;
+  }
+  if (CC == CCM_WasmMainArgcArgvEnvp) {
+    Out << "__main_argc_argv_envp";
     return;
   }
 
