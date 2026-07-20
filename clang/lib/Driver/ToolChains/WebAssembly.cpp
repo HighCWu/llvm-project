@@ -163,6 +163,12 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasArg(options::OPT_shared))
     CmdArgs.push_back(Args.MakeArgString("-shared"));
 
+  // Linux reserves function-pointer values 1 and 2 for SIG_IGN and SIG_HOLD.
+  // Keep real address-taken functions out of those wasm table slots. Linker
+  // inputs follow this default, so an explicit user --table-base wins.
+  if (ToolChain.getTriple().isOSLinux())
+    CmdArgs.push_back("--table-base=3");
+
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
 
   if (WantsPthread(ToolChain.getTriple(), Args))
