@@ -12,8 +12,10 @@
 // functions. We need to ensure that the return value is sign-extended in the
 // same way as GCC expects (since otherwise GCC-generated __builtin_isinf
 // returns true for finite 128-bit floating-point numbers).
-#if defined(__aarch64__) || defined(__arm64ec__)
-// AArch64 GCC overrides libgcc_cmp_return to use int instead of long.
+#if defined(__aarch64__) || defined(__arm64ec__) || defined(__wasm__)
+// AArch64 GCC and the WebAssembly toolchain ABI use int instead of long.
+// This matters for wasm64, where long is 64 bits but comparison builtins are
+// declared by Clang and libc callers with a 32-bit result.
 typedef int CMP_RESULT;
 #elif __SIZEOF_POINTER__ == 8 && __SIZEOF_LONG__ == 4
 // LLP64 ABIs use long long instead of long.
