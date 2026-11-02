@@ -19,6 +19,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include "llvm/ADT/StringMap.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -28,6 +29,8 @@
 using namespace llvm;
 
 void MCWasmStreamer::emitSymbolVersions() {
+  if (SymbolVersions.empty())
+    return;
   MCContext &Context = getContext();
   struct ResolvedVersion {
     const MCSymbolWasm *Original;
@@ -132,5 +135,46 @@ void MCWasmStreamer::emitSymbolVersions() {
     if (Version.Default)
       AddAlias(
           static_cast<MCSymbolWasm *>(Context.getOrCreateSymbol(Version.Base)));
+  }
+
+  // Several assembler identities can refer to one version-qualified linker
+  // name. A reference and definition in the same object must share a linking
+  // symbol index, just as two declarations of the same unversioned symbol do.
+  // Retain their MC identities: relocations and function imports already use
+  // those identities, and a distinct default definition may use the base name.
+  StringMap<const MCSymbolWasm *> LinkerSymbols;
+  for (const MCSymbol &Symbol : getAssembler().symbols()) {
+    const auto &Wasm = static_cast<const MCSymbolWasm &>(Symbol);
+    auto [Entry, Inserted] =
+        LinkerSymbols.try_emplace(Wasm.getLinkerName(), &Wasm);
+    if (Inserted)
+      continue;
+    const MCSymbolWasm &Previous = *Entry->second;
+    if (!Wasm.hasLinkerName() && !Previous.hasLinkerName())
+      continue;
+    if (Wasm.getType().value_or(wasm::WASM_SYMBOL_TYPE_DATA) !=
+            Previous.getType().value_or(wasm::WASM_SYMBOL_TYPE_DATA) ||
+        (Wasm.getSignature() && Previous.getSignature() &&
+         *Wasm.getSignature() != *Previous.getSignature()) ||
+        Wasm.isTLS() != Previous.isTLS()) {
+      Context.reportError(SMLoc(), "incompatible versioned symbol " +
+                                       Wasm.getLinkerName());
+      continue;
+    }
+    if (Wasm.isDefined() && Previous.isDefined()) {
+      Context.reportError(SMLoc(), "redefinition of versioned symbol " +
+                                       Wasm.getLinkerName());
+      continue;
+    }
+    if (Wasm.isDefined() ||
+        (Previous.isUndefined() && Previous.isWeak() && !Wasm.isWeak()))
+      Entry->second = &Wasm;
+  }
+  for (const MCSymbol &Symbol : getAssembler().symbols()) {
+    const auto &Wasm = static_cast<const MCSymbolWasm &>(Symbol);
+    const auto *Canonical = LinkerSymbols.lookup(Wasm.getLinkerName());
+    if (Canonical != &Wasm &&
+        (Wasm.hasLinkerName() || Canonical->hasLinkerName()))
+      Wasm.setVersionedLinkerSymbol(Canonical);
   }
 }

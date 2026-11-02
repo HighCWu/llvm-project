@@ -26,6 +26,7 @@ class MCSymbolWasm : public MCSymbol {
   std::optional<StringRef> ImportName;
   std::optional<StringRef> ExportName;
   mutable std::optional<StringRef> LinkerName;
+  mutable const MCSymbolWasm *VersionedLinkerSymbol = nullptr;
   wasm::WasmSignature *Signature = nullptr;
   std::optional<wasm::WasmGlobalType> GlobalType;
   std::optional<wasm::WasmTableType> TableType;
@@ -88,6 +89,12 @@ public:
   StringRef getLinkerName() const { return LinkerName.value_or(getName()); }
   bool hasLinkerName() const { return LinkerName.has_value(); }
   void setLinkerName(StringRef Name) const { LinkerName = Name; }
+  const MCSymbolWasm *getVersionedLinkerSymbol() const {
+    return VersionedLinkerSymbol ? VersionedLinkerSymbol : this;
+  }
+  void setVersionedLinkerSymbol(const MCSymbolWasm *Symbol) const {
+    VersionedLinkerSymbol = Symbol;
+  }
 
   // wasm-ld understands a finite set of symbol types.  This flag allows the
   // compiler to avoid emitting symbol table entries that would confuse the

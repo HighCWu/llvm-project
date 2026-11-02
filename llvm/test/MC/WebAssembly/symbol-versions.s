@@ -6,17 +6,32 @@
 .symver old_impl, api@VERSION_1
 .symver new_impl, api@@VERSION_2
 .symver data_impl, data_api@@VERSION_2
+.symver old_ref, api@VERSION_1
+.symver old_again, api@VERSION_1
+.functype old_ref () -> (i32)
+.functype old_again () -> (i32)
 
+.section .text.old_impl,"",@
 .globl old_impl
 old_impl:
   .functype old_impl () -> (i32)
   i32.const 1
   end_function
 
+.section .text.new_impl,"",@
 .globl new_impl
 new_impl:
   .functype new_impl () -> (i32)
   i32.const 2
+  end_function
+
+.section .text.same_unit,"",@
+.globl same_unit
+same_unit:
+  .functype same_unit () -> (i32)
+  call old_ref
+  call old_again
+  i32.add
   end_function
 
 .section .data.data_impl,"",@

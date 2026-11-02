@@ -1765,6 +1765,8 @@ uint64_t WasmObjectWriter::writeOneObject(MCAssembler &Asm,
   // Finally, populate the symbol table itself, in its "natural" order.
   for (const MCSymbol &S : Asm.symbols()) {
     const auto &WS = static_cast<const MCSymbolWasm &>(S);
+    if (WS.getVersionedLinkerSymbol() != &WS)
+      continue;
     if (!isInSymtab(WS)) {
       WS.setIndex(InvalidIndex);
       continue;
@@ -1818,6 +1820,15 @@ uint64_t WasmObjectWriter::writeOneObject(MCAssembler &Asm,
     }
     WS.setIndex(SymbolInfos.size());
     SymbolInfos.emplace_back(Info);
+  }
+
+  // MC references with the same explicit version use the canonical linking
+  // entry. Their individual provisional function indices remain unchanged;
+  // the relocations bind them to this entry at link time.
+  for (const MCSymbol &S : Asm.symbols()) {
+    const auto &WS = static_cast<const MCSymbolWasm &>(S);
+    if (WS.getVersionedLinkerSymbol() != &WS)
+      WS.setIndex(WS.getVersionedLinkerSymbol()->getIndex());
   }
 
   {
