@@ -280,7 +280,8 @@ bool WebAssemblyAsmTypeCheck::getGlobal(SMLoc ErrorLoc,
 }
 
 bool WebAssemblyAsmTypeCheck::getTable(SMLoc ErrorLoc, const MCOperand &TableOp,
-                                       wasm::ValType &Type) {
+                                       wasm::ValType &Type,
+                                       wasm::ValType *IndexType) {
   const MCSymbolRefExpr *SymRef;
   if (getSymRef(ErrorLoc, TableOp, SymRef))
     return true;
@@ -290,6 +291,11 @@ bool WebAssemblyAsmTypeCheck::getTable(SMLoc ErrorLoc, const MCOperand &TableOp,
     return typeError(ErrorLoc, StringRef("symbol ") + WasmSym->getName() +
                                    ": missing .tabletype");
   Type = static_cast<wasm::ValType>(WasmSym->getTableType().ElemType);
+  if (IndexType)
+    *IndexType =
+        (WasmSym->getTableType().Limits.Flags & wasm::WASM_LIMITS_FLAG_IS_64)
+            ? wasm::ValType::I64
+            : wasm::ValType::I32;
   return false;
 }
 
@@ -607,8 +613,16 @@ bool WebAssemblyAsmTypeCheck::typeCheck(SMLoc ErrorLoc, const MCInst &Inst,
   }
 
   if (Name == "call_indirect" || Name == "return_call_indirect") {
-    // Function value.
-    bool Error = popType(ErrorLoc, wasm::ValType::I32);
+    // The function pointer indexes this table, independently of memory's
+    // address width. MVP's implicit table follows the target's default;
+    // reference-types instructions carry the actual table symbol.
+    auto IndexType = Is64 ? wasm::ValType::I64 : wasm::ValType::I32;
+    const auto &Table = Inst.getOperand(1);
+    wasm::ValType ElemType;
+    if (Table.isExpr() &&
+        getTable(Operands.back()->getStartLoc(), Table, ElemType, &IndexType))
+      return true;
+    bool Error = popType(ErrorLoc, IndexType);
     Error |= checkSig(ErrorLoc, LastSig);
     if (Name == "return_call_indirect") {
       Error |= endOfFunction(ErrorLoc, false);
