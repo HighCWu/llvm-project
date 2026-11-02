@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # RUN: split-file %s %t
 # RUN: not llvm-mc -triple=wasm32 -filetype=obj %t/empty.s 2>&1 | FileCheck %s --check-prefix=EMPTY
 # RUN: not llvm-mc -triple=wasm32 -filetype=obj %t/undefined.s 2>&1 | FileCheck %s --check-prefix=UNDEF

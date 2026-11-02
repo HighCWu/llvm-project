@@ -67,6 +67,7 @@ add_llvm_component_library(LLVMMC
   StringTableBuilder.cpp
   TargetRegistry.cpp
   WasmObjectWriter.cpp
+  WasmSymbolVersions.cpp
   WinCOFFObjectWriter.cpp
   XCOFFObjectWriter.cpp
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # RUN: llvm-mc -triple=wasm32 -filetype=obj %s | llvm-readobj --symbols - | FileCheck %s
 # RUN: llvm-mc -triple=wasm64 -filetype=obj %s | llvm-readobj --symbols - | FileCheck %s
 
