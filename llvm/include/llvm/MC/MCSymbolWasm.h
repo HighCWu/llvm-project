@@ -25,6 +25,7 @@ class MCSymbolWasm : public MCSymbol {
   std::optional<StringRef> ImportModule;
   std::optional<StringRef> ImportName;
   std::optional<StringRef> ExportName;
+  mutable std::optional<StringRef> LinkerName;
   wasm::WasmSignature *Signature = nullptr;
   std::optional<wasm::WasmGlobalType> GlobalType;
   std::optional<wasm::WasmTableType> TableType;
@@ -82,6 +83,12 @@ public:
   bool isComdat() const { return IsComdat; }
   void setComdat(bool isComdat) { IsComdat = isComdat; }
 
+  // A .symver reference keeps its assembler identity and relocation uses,
+  // but binds to a version-qualified name in the object/linker namespace.
+  StringRef getLinkerName() const { return LinkerName.value_or(getName()); }
+  bool hasLinkerName() const { return LinkerName.has_value(); }
+  void setLinkerName(StringRef Name) const { LinkerName = Name; }
+
   // wasm-ld understands a finite set of symbol types.  This flag allows the
   // compiler to avoid emitting symbol table entries that would confuse the
   // linker, unless the user specifically requests the feature.
@@ -104,7 +111,7 @@ public:
   StringRef getImportName() const {
     if (ImportName)
       return *ImportName;
-    return getName();
+    return getLinkerName();
   }
   void setImportName(StringRef Name) { ImportName = Name; }
 

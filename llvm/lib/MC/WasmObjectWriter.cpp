@@ -1419,7 +1419,7 @@ void WasmObjectWriter::prepareImports(
         Import.Module = "GOT.func";
       else
         Import.Module = "GOT.mem";
-      Import.Field = WS.getName();
+      Import.Field = WS.getLinkerName();
       Import.Kind = wasm::WASM_EXTERNAL_GLOBAL;
       Import.Global = {wasm::WASM_TYPE_I32, true};
       Imports.push_back(Import);
@@ -1806,7 +1806,7 @@ uint64_t WasmObjectWriter::writeOneObject(MCAssembler &Asm,
       Flags |= wasm::WASM_SYMBOL_TLS;
 
     wasm::WasmSymbolInfo Info;
-    Info.Name = WS.getName();
+    Info.Name = WS.getLinkerName();
     Info.Kind = WS.getType().value_or(wasm::WASM_SYMBOL_TYPE_DATA);
     Info.Flags = Flags;
     if (!WS.isData()) {

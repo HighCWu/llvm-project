@@ -58,6 +58,7 @@ public:
     addDirectiveHandler<&WasmAsmParser::parseSectionDirective>(".section");
     addDirectiveHandler<&WasmAsmParser::parseDirectiveSize>(".size");
     addDirectiveHandler<&WasmAsmParser::parseDirectiveType>(".type");
+    addDirectiveHandler<&WasmAsmParser::parseDirectiveSymver>(".symver");
     addDirectiveHandler<&WasmAsmParser::ParseDirectiveIdent>(".ident");
     addDirectiveHandler<
       &WasmAsmParser::ParseDirectiveSymbolAttribute>(".weak");
@@ -84,6 +85,42 @@ public:
     if (!isNext(Kind))
       return error(std::string("Expected ") + KindName + ", instead got: ",
                    Lexer->getTok());
+    return false;
+  }
+
+  bool parseDirectiveSymver(StringRef, SMLoc) {
+    MCSymbol *Original;
+    if (Parser->parseSymbol(Original))
+      return TokError("expected identifier");
+    if (Lexer->isNot(AsmToken::Comma))
+      return TokError("expected a comma");
+
+    // The next token must include the ELF-style version separator.
+    bool AllowAt = Lexer->getAllowAtInIdentifier();
+    Lexer->setAllowAtInIdentifier(true);
+    Lex();
+    Lexer->setAllowAtInIdentifier(AllowAt);
+    StringRef Name;
+    if (Parser->parseIdentifier(Name))
+      return TokError("expected versioned symbol name");
+    size_t At = Name.find('@');
+    size_t Version = At == StringRef::npos ? StringRef::npos
+                                           : Name.find_first_not_of('@', At);
+    if (At == StringRef::npos || At == 0 || Version == StringRef::npos ||
+        Version - At > 3 || Name.substr(Version).contains('@'))
+      return TokError(
+          "expected symbol@version, symbol@@version or symbol@@@version");
+
+    bool KeepOriginal = Version - At != 3;
+    if (Parser->parseOptionalToken(AsmToken::Comma)) {
+      StringRef Action;
+      if (Parser->parseIdentifier(Action) || Action != "remove")
+        return TokError("expected 'remove'");
+      KeepOriginal = false;
+    }
+    if (Parser->parseToken(AsmToken::EndOfStatement))
+      return true;
+    getStreamer().emitELFSymverDirective(Original, Name, KeepOriginal);
     return false;
   }
 
