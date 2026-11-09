@@ -9784,6 +9784,9 @@ def no_wasm_opt : Flag<["--"], "no-wasm-opt">,
   Group<m_Group>,
   HelpText<"Disable the wasm-opt optimizer">,
   MarshallingInfoFlag<LangOpts<"NoWasmOpt">>;
+def wasm_fork_asyncify : Flag<["--"], "wasm-fork-asyncify">,
+  Flags<[NoArgumentUnused]>, Visibility<[ClangOption]>,
+  HelpText<"Run required Asyncify finalization for Linux Wasm fork continuations">;
 def wasm_opt : Flag<["--"], "wasm-opt">,
   Group<m_Group>,
   HelpText<"Enable the wasm-opt optimizer (default)">,

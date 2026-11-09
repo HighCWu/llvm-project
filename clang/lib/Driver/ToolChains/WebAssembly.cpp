@@ -81,6 +81,68 @@ static bool WantsPthread(const llvm::Triple &Triple, const ArgList &Args) {
   return WantsPthread;
 }
 
+class ForkAsyncifyCommand final : public Command {
+  std::string LinkerOutputPath;
+  std::string FinalOutputPath;
+
+public:
+  ForkAsyncifyCommand(const Action &Source, const Tool &Creator,
+                      ResponseFileSupport ResponseSupport,
+                      const char *Executable, const ArgStringList &Arguments,
+                      ArrayRef<InputInfo> Inputs, ArrayRef<InputInfo> Outputs,
+                      StringRef LinkerOutputPathArg,
+                      StringRef FinalOutputPathArg)
+      : Command(Source, Creator, ResponseSupport, Executable, Arguments, Inputs,
+                Outputs),
+        LinkerOutputPath(LinkerOutputPathArg),
+        FinalOutputPath(FinalOutputPathArg) {}
+
+  int Execute(ArrayRef<std::optional<StringRef>> Redirects, std::string *ErrMsg,
+              bool *ExecutionFailed) const override {
+    int Result = Command::Execute(Redirects, ErrMsg, ExecutionFailed);
+    if (Result != 0)
+      return Result;
+
+    if (FinalOutputPath == "-")
+      return 0;
+
+    llvm::sys::fs::file_status FinalOutputStatus;
+    if (std::error_code EC =
+            llvm::sys::fs::status(FinalOutputPath, FinalOutputStatus)) {
+      if (ErrMsg)
+        *ErrMsg =
+            "failed to read permissions from final output: " + EC.message();
+      if (ExecutionFailed)
+        *ExecutionFailed = true;
+      return -1;
+    }
+    if (!llvm::sys::fs::is_regular_file(FinalOutputStatus))
+      return 0;
+
+    llvm::sys::fs::file_status LinkerOutputStatus;
+    if (std::error_code EC =
+            llvm::sys::fs::status(LinkerOutputPath, LinkerOutputStatus)) {
+      if (ErrMsg)
+        *ErrMsg =
+            "failed to read permissions from linker output: " + EC.message();
+      if (ExecutionFailed)
+        *ExecutionFailed = true;
+      return -1;
+    }
+
+    if (std::error_code EC = llvm::sys::fs::setPermissions(
+            FinalOutputPath, LinkerOutputStatus.permissions())) {
+      if (ErrMsg)
+        *ErrMsg =
+            "failed to preserve linker output permissions: " + EC.message();
+      if (ExecutionFailed)
+        *ExecutionFailed = true;
+      return -1;
+    }
+    return 0;
+  }
+};
+
 void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
                                 const InputInfo &Output,
                                 const InputInfoList &Inputs,
@@ -92,6 +154,23 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   ArgStringList CmdArgs;
   const bool IsLinux = ToolChain.getTriple().isOSLinux();
   const bool IsLinuxRelocatable = IsLinux && Args.hasArg(options::OPT_r);
+  const Arg *ForkAsyncifyArg = Args.getLastArg(options::OPT_wasm_fork_asyncify);
+  const bool ForkAsyncifyRequested = ForkAsyncifyArg != nullptr;
+  if (ForkAsyncifyRequested && !IsLinux) {
+    ToolChain.getDriver().Diag(diag::err_drv_unsupported_opt_for_target)
+        << ForkAsyncifyArg->getAsString(Args) << ToolChain.getTriple().str();
+    return;
+  }
+  if (ForkAsyncifyRequested) {
+    if (const Arg *LinkModeArg = Args.getLastArg(
+            options::OPT_shared, options::OPT_pie, options::OPT_static_pie)) {
+      ToolChain.getDriver().Diag(diag::err_drv_argument_not_allowed_with)
+          << ForkAsyncifyArg->getAsString(Args)
+          << LinkModeArg->getAsString(Args);
+      return;
+    }
+  }
+  const bool RunForkAsyncify = ForkAsyncifyRequested && !IsLinuxRelocatable;
 
   auto AddSysrootResponseFile = [&](StringRef Name) {
     const Driver &D = ToolChain.getDriver();
@@ -230,9 +309,6 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (!IsLinuxRelocatable)
     ToolChain.addProfileRTLibs(Args, CmdArgs);
 
-  CmdArgs.push_back("-o");
-  CmdArgs.push_back(Output.getFilename());
-
   // Don't use wasm-opt by default on `wasip2` as it doesn't have support for
   // components at this time. Retain the historical default otherwise, though,
   // of running `wasm-opt` by default.
@@ -242,25 +318,81 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
                    WasmOptDefault) &&
       !IsLinuxRelocatable;
 
-  // If wasm-opt is enabled and optimizations are happening look for the
-  // `wasm-opt` program. If it's not found auto-disable it.
+  // A requested fork Asyncify pass is mandatory even if optional wasm-opt
+  // optimization was disabled or no optimization level was selected.
   std::string WasmOptPath;
-  if (RunWasmOpt && Args.getLastArg(options::OPT_O_Group)) {
+  if (RunForkAsyncify ||
+      (RunWasmOpt && Args.getLastArg(options::OPT_O_Group))) {
     WasmOptPath = ToolChain.GetProgramPath("wasm-opt");
     if (WasmOptPath == "wasm-opt") {
-      WasmOptPath = {};
+      if (RunForkAsyncify) {
+        ToolChain.getDriver().Diag(diag::err_drv_command_failure)
+            << "wasm-opt is required for --wasm-fork-asyncify";
+        return;
+      }
+      WasmOptPath.clear();
     }
+  }
+
+  const char *LinkerOutputPath = Output.getFilename();
+  InputInfo LinkerOutput = Output;
+  if (RunForkAsyncify) {
+    std::string TmpPath =
+        ToolChain.getDriver().GetTemporaryPath("fork-asyncify", "wasm");
+    LinkerOutputPath = C.addTempFile(Args.MakeArgString(TmpPath));
+    LinkerOutput =
+        InputInfo(Output.getType(), LinkerOutputPath, Output.getBaseInput());
   }
 
   if (!WasmOptPath.empty()) {
     CmdArgs.push_back("--keep-section=target_features");
   }
 
-  C.addCommand(std::make_unique<Command>(JA, *this,
-                                         ResponseFileSupport::AtFileCurCP(),
-                                         Linker, CmdArgs, Inputs, Output));
+  CmdArgs.push_back("-o");
+  CmdArgs.push_back(LinkerOutputPath);
 
-  if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
+  C.addCommand(
+      std::make_unique<Command>(JA, *this, ResponseFileSupport::AtFileCurCP(),
+                                Linker, CmdArgs, Inputs, LinkerOutput));
+
+  if (RunForkAsyncify) {
+    ArgStringList OptArgs;
+    if (RunWasmOpt) {
+      if (const Arg *A = Args.getLastArg(options::OPT_O_Group)) {
+        StringRef OOpt = "s";
+        if (A->getOption().matches(options::OPT_O4) ||
+            A->getOption().matches(options::OPT_Ofast))
+          OOpt = "4";
+        else if (A->getOption().matches(options::OPT_O0))
+          OOpt = "0";
+        else if (A->getOption().matches(options::OPT_O))
+          OOpt = A->getValue();
+
+        if (OOpt != "0")
+          OptArgs.push_back(Args.MakeArgString(llvm::Twine("-O") + OOpt));
+      }
+    }
+    OptArgs.push_back(LinkerOutputPath);
+    OptArgs.push_back("--enable-threads");
+    OptArgs.push_back("--enable-bulk-memory");
+    OptArgs.push_back("--enable-mutable-globals");
+    OptArgs.push_back("--enable-sign-ext");
+    OptArgs.push_back("--enable-nontrapping-float-to-int");
+    OptArgs.push_back("--enable-memory64");
+    OptArgs.push_back("--enable-exception-handling");
+    OptArgs.push_back("--asyncify");
+    OptArgs.push_back("--pass-arg=asyncify-imports@linux_fork_v1.checkpoint,"
+                      "linux.syscall,linux.syscall_v2,linux_user_poll_v1."
+                      "checkpoint,linux_user_poll_v2.checkpoint");
+    OptArgs.push_back("--pass-arg=asyncify-asserts");
+    OptArgs.push_back("-o");
+    OptArgs.push_back(Output.getFilename());
+
+    const char *WasmOpt = Args.MakeArgString(WasmOptPath);
+    C.addCommand(std::make_unique<ForkAsyncifyCommand>(
+        JA, *this, ResponseFileSupport::AtFileCurCP(), WasmOpt, OptArgs,
+        LinkerOutput, Output, LinkerOutputPath, Output.getFilename()));
+  } else if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
     if (!WasmOptPath.empty()) {
       StringRef OOpt = "s";
       if (A->getOption().matches(options::OPT_O4) ||
