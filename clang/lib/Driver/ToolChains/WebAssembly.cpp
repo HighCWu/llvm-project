@@ -13,6 +13,7 @@
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Options/Options.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Config/llvm-config.h" // for LLVM_VERSION_STRING
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/FileSystem.h"
@@ -89,6 +90,36 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   const ToolChain &ToolChain = getToolChain();
   const char *Linker = Args.MakeArgString(getLinkerPath(Args));
   ArgStringList CmdArgs;
+  const bool IsLinux = ToolChain.getTriple().isOSLinux();
+  const bool IsLinuxRelocatable = IsLinux && Args.hasArg(options::OPT_r);
+
+  auto AddSysrootResponseFile = [&](StringRef Name) {
+    const Driver &D = ToolChain.getDriver();
+    if (D.SysRoot.empty())
+      return;
+
+    SmallString<128> ResponsePath(D.SysRoot);
+    llvm::sys::path::append(ResponsePath, "lib");
+    llvm::sys::path::append(ResponsePath, Name);
+    if (!llvm::sys::path::is_absolute(ResponsePath) &&
+        llvm::sys::fs::make_absolute(ResponsePath))
+      return;
+    if (!llvm::sys::fs::exists(ResponsePath))
+      return;
+
+    ResponsePath.insert(ResponsePath.begin(), '@');
+    CmdArgs.push_back(Args.MakeArgString(ResponsePath));
+  };
+
+  if (IsLinuxRelocatable) {
+    Args.ClaimAllArgs(options::OPT_stdlib_EQ);
+    Args.ClaimAllArgs(options::OPT_unwindlib_EQ);
+    Args.ClaimAllArgs(options::OPT_rtlib_EQ);
+    for (const Arg *A : Args.filtered(options::OPT_mllvm)) {
+      if (StringRef(A->getValue(0)) == "-wasm-enable-sjlj")
+        A->claim();
+    }
+  }
 
   CmdArgs.push_back("-m");
   if (ToolChain.getTriple().isArch64Bit())
@@ -153,7 +184,8 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     }
   }
 
-  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles))
+  if (!IsLinuxRelocatable &&
+      !Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles))
     CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(Crt1)));
   if (Entry) {
     CmdArgs.push_back(Args.MakeArgString("--entry"));
@@ -166,17 +198,27 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   // Linux reserves function-pointer values 1 and 2 for SIG_IGN and SIG_HOLD.
   // Keep real address-taken functions out of those wasm table slots. Linker
   // inputs follow this default, so an explicit user --table-base wins.
-  if (ToolChain.getTriple().isOSLinux())
+  if (IsLinux && !IsLinuxRelocatable)
     CmdArgs.push_back("--table-base=3");
+
+  if (IsLinux && !IsLinuxRelocatable) {
+    AddSysrootResponseFile(Args.hasArg(options::OPT_shared)
+                               ? "wasm-linux-shared.rsp"
+                               : "wasm-linux-executable.rsp");
+  }
 
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
 
-  if (WantsPthread(ToolChain.getTriple(), Args))
+  if (WantsPthread(ToolChain.getTriple(), Args) && !IsLinuxRelocatable)
     CmdArgs.push_back("--shared-memory");
 
-  if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
-    if (ToolChain.ShouldLinkCXXStdlib(Args))
+  if (!IsLinuxRelocatable &&
+      !Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
+    if (ToolChain.ShouldLinkCXXStdlib(Args)) {
       ToolChain.AddCXXStdlibLibArgs(Args, CmdArgs);
+      if (IsLinux && !IsLinuxRelocatable)
+        AddSysrootResponseFile("wasm-linux-cxx.rsp");
+    }
 
     if (WantsPthread(ToolChain.getTriple(), Args))
       CmdArgs.push_back("-lpthread");
@@ -185,7 +227,8 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     AddRunTimeLibs(ToolChain, ToolChain.getDriver(), CmdArgs, Args);
   }
 
-  ToolChain.addProfileRTLibs(Args, CmdArgs);
+  if (!IsLinuxRelocatable)
+    ToolChain.addProfileRTLibs(Args, CmdArgs);
 
   CmdArgs.push_back("-o");
   CmdArgs.push_back(Output.getFilename());
@@ -194,8 +237,10 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   // components at this time. Retain the historical default otherwise, though,
   // of running `wasm-opt` by default.
   bool WasmOptDefault = !TargetBuildsComponents(ToolChain.getTriple());
-  bool RunWasmOpt = Args.hasFlag(options::OPT_wasm_opt,
-                                 options::OPT_no_wasm_opt, WasmOptDefault);
+  bool RunWasmOpt =
+      !IsLinuxRelocatable &&
+      Args.hasFlag(options::OPT_wasm_opt, options::OPT_no_wasm_opt,
+                   WasmOptDefault);
 
   // If wasm-opt is enabled and optimizations are happening look for the
   // `wasm-opt` program. If it's not found auto-disable it.
