@@ -77,6 +77,9 @@ defm export_dynamic: B<"export-dynamic",
 def end_lib: F<"end-lib">,
   HelpText<"End a grouping of objects that should be treated as if they were together in an archive">;
 
+def end_group: F<"end-group">,
+  HelpText<"End a group of archives. Wasm archives are searched globally, so this is accepted for GNU linker compatibility">;
+
 def entry: S<"entry">, MetaVarName<"<entry>">,
   HelpText<"Name of entry point symbol">;
 
@@ -139,6 +142,9 @@ defm rsp_quoting: Eq<"rsp-quoting", "Quoting style for response files">,
 
 def shared: F<"shared">, HelpText<"Build a shared object">;
 
+def start_group: F<"start-group">,
+  HelpText<"Start a group of archives. Wasm archives are searched globally, so this is accepted for GNU linker compatibility">;
+
 def start_lib: F<"start-lib">,
   HelpText<"Start a grouping of objects that should be treated as if they were together in an archive">;
 
@@ -173,6 +179,10 @@ defm wrap: Eq<"wrap", "Use wrapper functions for symbol">,
 
 def z: JoinedOrSeparate<["-"], "z">, MetaVarName<"<option>">,
   HelpText<"Linker option extensions">;
+
+// GNU ld compatibility aliases for archive groups.
+def: Flag<["-"], ")">, Alias<end_group>, HelpText<"Alias for --end-group">;
+def: Flag<["-"], "(">, Alias<start_group>, HelpText<"Alias for --start-group">;
 
 // The follow flags are unique to wasm
 
