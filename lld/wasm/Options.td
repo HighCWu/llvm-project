@@ -171,6 +171,9 @@ def verbose: F<"verbose">, HelpText<"Verbose mode">;
 
 def version: F<"version">, HelpText<"Display the version number and exit">;
 
+def warn_common: F<"warn-common">,
+  HelpText<"Accepted for GNU compatibility; Wasm objects do not support COMMON symbols">;
+
 def warn_unresolved_symbols: F<"warn-unresolved-symbols">,
   HelpText<"Report unresolved symbols as warnings">;
 
