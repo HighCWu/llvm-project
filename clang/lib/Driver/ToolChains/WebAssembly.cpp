@@ -238,9 +238,9 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   // of running `wasm-opt` by default.
   bool WasmOptDefault = !TargetBuildsComponents(ToolChain.getTriple());
   bool RunWasmOpt =
-      !IsLinuxRelocatable &&
       Args.hasFlag(options::OPT_wasm_opt, options::OPT_no_wasm_opt,
-                   WasmOptDefault);
+                   WasmOptDefault) &&
+      !IsLinuxRelocatable;
 
   // If wasm-opt is enabled and optimizations are happening look for the
   // `wasm-opt` program. If it's not found auto-disable it.
