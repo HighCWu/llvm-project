@@ -55,6 +55,7 @@ struct Config {
   bool compressRelocations;
   bool demangle;
   bool disableVerify;
+  bool experimentalElfContainer = false;
   bool experimentalPic;
   bool emitRelocs;
   bool exportAll;

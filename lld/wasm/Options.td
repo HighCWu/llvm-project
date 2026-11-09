@@ -323,3 +323,7 @@ def lto_debug_pass_manager: FF<"lto-debug-pass-manager">,
 // Experimental PIC mode.
 def experimental_pic: FF<"experimental-pic">,
   HelpText<"Enable Experimental PIC">;
+
+def experimental_elf_container: FF<"experimental-elf-container">,
+  HelpText<"Wrap a final static Wasm executable in an experimental ELF "
+           "carrier">;

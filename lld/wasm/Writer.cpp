@@ -8,6 +8,7 @@
 
 #include "Writer.h"
 #include "Config.h"
+#include "ElfContainer.h"
 #include "InputChunks.h"
 #include "InputElement.h"
 #include "MapFile.h"
@@ -104,6 +105,7 @@ private:
   void writeHeader();
   void writeSections();
   void writeBuildId();
+  uint8_t *wasmBufferStart();
 
   uint64_t fileSize = 0;
 
@@ -214,11 +216,11 @@ void Writer::populateProducers() {
 }
 
 void Writer::writeHeader() {
-  memcpy(buffer->getBufferStart(), header.data(), header.size());
+  memcpy(wasmBufferStart(), header.data(), header.size());
 }
 
 void Writer::writeSections() {
-  uint8_t *buf = buffer->getBufferStart();
+  uint8_t *buf = wasmBufferStart();
   parallelForEach(outputSections, [buf](OutputSection *s) {
     assert(s->isNeeded());
     s->writeTo(buf);
@@ -285,7 +287,7 @@ void Writer::writeBuildId() {
   // Compute a hash of all sections of the output file.
   size_t hashSize = out.buildIdSec->hashSize;
   std::vector<uint8_t> buildId(hashSize);
-  llvm::ArrayRef<uint8_t> buf{buffer->getBufferStart(), size_t(fileSize)};
+  llvm::ArrayRef<uint8_t> buf{wasmBufferStart(), size_t(fileSize)};
 
   switch (ctx.arg.buildId) {
   case BuildIdKind::Fast: {
@@ -1873,8 +1875,18 @@ void Writer::run() {
 void Writer::openFile() {
   log("writing: " + ctx.arg.outputFile);
 
+  uint64_t outputSize = fileSize;
+  if (ctx.arg.experimentalElfContainer) {
+    outputSize = elfContainerFileSize(fileSize, ctx.arg.is64.value_or(false));
+    if (!outputSize) {
+      error("Wasm module is too large or invalid for the experimental ELF "
+            "container");
+      return;
+    }
+  }
+
   Expected<std::unique_ptr<FileOutputBuffer>> bufferOrErr =
-      FileOutputBuffer::create(ctx.arg.outputFile, fileSize,
+      FileOutputBuffer::create(ctx.arg.outputFile, outputSize,
                                FileOutputBuffer::F_executable);
 
   if (!bufferOrErr)
@@ -1882,6 +1894,21 @@ void Writer::openFile() {
           toString(bufferOrErr.takeError()));
   else
     buffer = std::move(*bufferOrErr);
+
+  if (buffer && ctx.arg.experimentalElfContainer &&
+      !writeElfContainerPrefix(buffer->getBufferStart(),
+                               static_cast<size_t>(outputSize), fileSize,
+                               ctx.arg.is64.value_or(false))) {
+    error("failed to write experimental ELF container prefix");
+    buffer.reset();
+  }
+}
+
+uint8_t *Writer::wasmBufferStart() {
+  if (!ctx.arg.experimentalElfContainer)
+    return buffer->getBufferStart();
+  return buffer->getBufferStart() +
+         elfContainerPrefixSize(ctx.arg.is64.value_or(false));
 }
 
 void Writer::createHeader() {

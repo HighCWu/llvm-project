@@ -4,6 +4,7 @@ add_public_tablegen_target(WasmOptionsTableGen)
 
 add_lld_library(lldWasm
   Driver.cpp
+  ElfContainer.cpp
   InputChunks.cpp
   InputFiles.cpp
   LTO.cpp

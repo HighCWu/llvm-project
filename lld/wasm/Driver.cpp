@@ -534,6 +534,8 @@ static void readConfigs(opt::InputArgList &args) {
   ctx.arg.compressRelocations = args.hasArg(OPT_compress_relocations);
   ctx.arg.demangle = args.hasFlag(OPT_demangle, OPT_no_demangle, true);
   ctx.arg.disableVerify = args.hasArg(OPT_disable_verify);
+  ctx.arg.experimentalElfContainer =
+      args.hasArg(OPT_experimental_elf_container);
   ctx.arg.emitRelocs = args.hasArg(OPT_emit_relocs);
   ctx.arg.experimentalPic = args.hasArg(OPT_experimental_pic);
   ctx.arg.entry = getEntry(args);
@@ -768,6 +770,11 @@ static void checkOptions(opt::InputArgList &args) {
     error("--lto-partitions: number of threads must be > 0");
   if (!get_threadpool_strategy(ctx.arg.thinLTOJobs))
     error("--thinlto-jobs: invalid job count: " + ctx.arg.thinLTOJobs);
+
+  if (ctx.arg.experimentalElfContainer &&
+      (ctx.arg.shared || ctx.arg.pie || ctx.arg.relocatable))
+    error("--experimental-elf-container is only supported for final static "
+          "executables");
 
   if (ctx.arg.pie && ctx.arg.shared)
     error("-shared and -pie may not be used together");
