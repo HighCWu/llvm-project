@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: MIT
+# Test that --weaken and --weaken-symbol[s] update defined WebAssembly
+# symbol bindings without changing imports, locals, or relocations.
+# RUN: yaml2obj %s -o %t.o
+# RUN: llvm-objcopy --weaken %t.o %t.all.o
+# RUN: obj2yaml %t.all.o | FileCheck %s --check-prefix=ALL
+# RUN: llvm-objcopy --weaken-symbol=strong_data %t.o %t.named.o
+# RUN: obj2yaml %t.named.o | FileCheck %s --check-prefix=NAMED
+# RUN: echo strong_fn > %t.symbols
+# RUN: llvm-objcopy --weaken-symbols=%t.symbols %t.o %t.list.o
+# RUN: obj2yaml %t.list.o | FileCheck %s --check-prefix=LIST
+# RUN: llvm-ar crs %t.a %t.o
+# RUN: llvm-objcopy --weaken %t.a %t.weakened.a
+# RUN: llvm-ar p %t.weakened.a > %t.member.o
+# RUN: obj2yaml %t.member.o | FileCheck %s --check-prefix=ARCHIVE
+
+# ALL: Type: CODE
+# ALL: Relocations:
+# ALL: Type: R_WASM_FUNCTION_INDEX_LEB
+# ALL: Name: linking
+# ALL: SymbolTable:
+# ALL: Name: strong_fn
+# ALL: Flags: [ BINDING_WEAK ]
+# ALL: Name: imported_fn
+# ALL: Flags: [ UNDEFINED ]
+# ALL: Name: local_fn
+# ALL: Flags: [ BINDING_LOCAL ]
+# ALL: Name: strong_data
+# ALL: Flags: [ BINDING_WEAK ]
+# ALL: Name: local_data
+# ALL: Flags: [ BINDING_LOCAL ]
+
+# NAMED: Name: strong_fn
+# NAMED: Flags: [  ]
+# NAMED: Name: imported_fn
+# NAMED: Flags: [ UNDEFINED ]
+# NAMED: Name: local_fn
+# NAMED: Flags: [ BINDING_LOCAL ]
+# NAMED: Name: strong_data
+# NAMED: Flags: [ BINDING_WEAK ]
+# NAMED: Name: local_data
+# NAMED: Flags: [ BINDING_LOCAL ]
+
+# LIST: Name: strong_fn
+# LIST: Flags: [ BINDING_WEAK ]
+# LIST: Name: strong_data
+# LIST: Flags: [  ]
+
+# ARCHIVE: Name: strong_fn
+# ARCHIVE: Flags: [ BINDING_WEAK ]
+# ARCHIVE: Name: strong_data
+# ARCHIVE: Flags: [ BINDING_WEAK ]
+
+--- !WASM
+FileHeader:
+  Version: 0x00000001
+Sections:
+  - Type: TYPE
+    Signatures:
+      - Index: 0
+        ParamTypes: []
+        ReturnTypes: []
+  - Type: IMPORT
+    Imports:
+      - Module: env
+        Field: imported_fn
+        Kind: FUNCTION
+        SigIndex: 0
+  - Type: FUNCTION
+    FunctionTypes: [ 0, 0 ]
+  - Type: CODE
+    Relocations:
+      - Type: R_WASM_FUNCTION_INDEX_LEB
+        Index: 0
+        Offset: 4
+    Functions:
+      - Index: 1
+        Locals: []
+        Body: 1080808080000B
+      - Index: 2
+        Locals: []
+        Body: 000B
+  - Type: DATA
+    Segments:
+      - SectionOffset: 0
+        InitFlags: 0
+        Offset:
+          Opcode: I32_CONST
+          Value: 0
+        Content: '01020304'
+  - Type: CUSTOM
+    Name: linking
+    Version: 2
+    SymbolTable:
+      - Index: 0
+        Kind: FUNCTION
+        Name: strong_fn
+        Flags: []
+        Function: 1
+      - Index: 1
+        Kind: FUNCTION
+        Name: imported_fn
+        Flags: [ UNDEFINED ]
+        Function: 0
+      - Index: 2
+        Kind: FUNCTION
+        Name: local_fn
+        Flags: [ BINDING_LOCAL ]
+        Function: 2
+      - Index: 3
+        Kind: DATA
+        Name: strong_data
+        Flags: []
+        Segment: 0
+        Offset: 0
+        Size: 4
+      - Index: 4
+        Kind: DATA
+        Name: local_data
+        Flags: [ BINDING_LOCAL ]
+        Segment: 0
+        Offset: 0
+        Size: 1
+...

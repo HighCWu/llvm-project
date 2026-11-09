@@ -21,6 +21,14 @@ void Object::addSectionWithOwnedContents(
   OwnedContents.emplace_back(std::move(Content));
 }
 
+void Object::replaceSectionContentsWithOwned(
+    Section &Sec, std::unique_ptr<MemoryBuffer> &&Content) {
+  Sec.Contents = ArrayRef<uint8_t>(
+      reinterpret_cast<const uint8_t *>(Content->getBufferStart()),
+      Content->getBufferSize());
+  OwnedContents.emplace_back(std::move(Content));
+}
+
 void Object::removeSections(function_ref<bool(const Section &)> ToRemove) {
   if (isRelocatableObject) {
     // For relocatable objects, avoid actually removing any sections,
