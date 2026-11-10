@@ -275,9 +275,16 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(Args.MakeArgString("-shared"));
 
   // Linux reserves function-pointer values 1 and 2 for SIG_IGN and SIG_HOLD.
-  // Keep real address-taken functions out of those wasm table slots. Linker
-  // inputs follow this default, so an explicit user --table-base wins.
-  if (IsLinux && !IsLinuxRelocatable)
+  // Keep real address-taken functions out of those wasm table slots in
+  // non-PIE executables. Shared objects and PIE images let the runtime linker
+  // allocate their table entries. Linker inputs follow this default, so an
+  // explicit user --table-base wins.
+  const bool IsPIE =
+      Args.hasFlag(options::OPT_pie, options::OPT_no_pie,
+                   ToolChain.isPIEDefault(Args)) ||
+      Args.hasArg(options::OPT_static_pie);
+  if (IsLinux && !IsLinuxRelocatable && !Args.hasArg(options::OPT_shared) &&
+      !IsPIE)
     CmdArgs.push_back("--table-base=3");
 
   if (IsLinux && !IsLinuxRelocatable) {
