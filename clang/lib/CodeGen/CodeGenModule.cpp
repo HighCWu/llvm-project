@@ -157,6 +157,8 @@ createTargetCodeGenInfo(CodeGenModule &CGM) {
     WebAssemblyABIKind Kind = WebAssemblyABIKind::MVP;
     if (Target.getABI() == "experimental-mv")
       Kind = WebAssemblyABIKind::ExperimentalMV;
+    else if (Target.getABI() == "linux64")
+      Kind = WebAssemblyABIKind::Linux64;
     return createWebAssemblyTargetCodeGenInfo(CGM, Kind);
   }
 

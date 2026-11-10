@@ -1406,6 +1406,15 @@ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
 
+  const Function &MFFunction = MF.getFunction();
+  const bool FunctionUsesLinux64VarArgsABI =
+      Subtarget->hasAddr64() &&
+      MFFunction.hasFnAttribute("wasm-varargs-abi") &&
+      MFFunction.getFnAttribute("wasm-varargs-abi").getValueAsString() ==
+          "linux64";
+  const bool UsesLinux64VarArgsABI = FunctionUsesLinux64VarArgsABI ||
+      static_cast<const WebAssemblyTargetMachine &>(getTargetMachine())
+          .usesLinux64VarArgsABI();
   if (IsVarArg) {
     // Outgoing non-fixed arguments are placed in a buffer. First
     // compute their offsets and the total amount of buffer space needed.
@@ -1417,8 +1426,12 @@ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
       Type *Ty = VT.getTypeForEVT(*DAG.getContext());
       Align Alignment =
           std::max(Out.Flags.getNonZeroOrigAlign(), Layout.getABITypeAlign(Ty));
-      unsigned Offset =
-          CCInfo.AllocateStack(Layout.getTypeAllocSize(Ty), Alignment);
+      unsigned Size = Layout.getTypeAllocSize(Ty);
+      if (UsesLinux64VarArgsABI) {
+        Size = alignTo(Size, 8u);
+        Alignment = std::max(Alignment, Align(8));
+      }
+      unsigned Offset = CCInfo.AllocateStack(Size, Alignment);
       CCInfo.addLoc(CCValAssign::getMem(ArgLocs.size(), VT.getSimpleVT(),
                                         Offset, VT.getSimpleVT(),
                                         CCValAssign::Full));
@@ -1441,11 +1454,14 @@ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
       assert(ArgLocs[ValNo].getValNo() == ValNo &&
              "ArgLocs should remain in order and only hold varargs args");
       unsigned Offset = ArgLocs[ValNo++].getLocMemOffset();
+      SDValue ArgToStore = Arg;
+      if (UsesLinux64VarArgsABI && Arg.getValueType() == MVT::i32)
+        ArgToStore = DAG.getNode(ISD::ZERO_EXTEND, DL, MVT::i64, Arg);
       FINode = DAG.getFrameIndex(FI, getPointerTy(Layout));
       SDValue Add = DAG.getNode(ISD::ADD, DL, PtrVT, FINode,
                                 DAG.getConstant(Offset, DL, PtrVT));
       Chains.push_back(
-          DAG.getStore(Chain, DL, Arg, Add,
+          DAG.getStore(Chain, DL, ArgToStore, Add,
                        MachinePointerInfo::getFixedStack(MF, FI, Offset)));
     }
     if (!Chains.empty())

@@ -604,6 +604,7 @@ createDirectXTargetCodeGenInfo(CodeGenModule &CGM);
 enum class WebAssemblyABIKind {
   MVP = 0,
   ExperimentalMV = 1,
+  Linux64 = 2,
 };
 
 std::unique_ptr<TargetCodeGenInfo>

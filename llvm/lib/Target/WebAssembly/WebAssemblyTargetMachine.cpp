@@ -195,7 +195,10 @@ WebAssemblyTargetMachine::WebAssemblyTargetMachine(
                                getEffectiveRelocModel(RM),
                                getEffectiveCodeModel(CM, CodeModel::Large), OL),
       TLOF(new WebAssemblyTargetObjectFile()),
-      UsesMultivalueABI(Options.MCOptions.getABIName() == "experimental-mv") {
+      UsesMultivalueABI(Options.MCOptions.getABIName() == "experimental-mv"),
+      UsesLinux64VarArgsABI(Options.MCOptions.getABIName() == "linux64" &&
+                           TT.getArch() == Triple::wasm64 &&
+                           TT.getOS() == Triple::Linux) {
   // WebAssembly type-checks instructions, but a noreturn function with a return
   // type that doesn't match the context will cause a check failure. So we lower
   // LLVM 'unreachable' to ISD::TRAP and then lower that to WebAssembly's

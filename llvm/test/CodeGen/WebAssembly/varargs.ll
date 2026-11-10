@@ -3,6 +3,9 @@
 
 ; RUN: llc < %s -mtriple wasm64-unknown-emscripten -asm-verbose=false -disable-wasm-fallthrough-return-opt -wasm-disable-explicit-locals -wasm-keep-registers -verify-machineinstrs | FileCheck %s -DPTR=64 --check-prefix=CHECK --check-prefix=EMSCRIPTEN
 ; RUN: llc < %s -mtriple wasm64-unknown-unknown -asm-verbose=false -disable-wasm-fallthrough-return-opt -wasm-disable-explicit-locals -wasm-keep-registers -verify-machineinstrs | FileCheck %s -DPTR=64 --check-prefix=CHECK --check-prefix=UNKNOWN
+; RUN: llc < %s -mtriple wasm64-unknown-linux -target-abi=linux64 -asm-verbose=false -disable-wasm-fallthrough-return-opt -wasm-disable-explicit-locals -wasm-keep-registers -verify-machineinstrs | FileCheck %s --check-prefix=LINUX64
+; RUN: llc < %s -mtriple wasm64-unknown-unknown -asm-verbose=false -disable-wasm-fallthrough-return-opt -wasm-disable-explicit-locals -wasm-keep-registers -verify-machineinstrs | FileCheck %s --check-prefix=LINUX64-FNATTR
+; RUN: llc < %s -mtriple wasm32-unknown-unknown -asm-verbose=false -disable-wasm-fallthrough-return-opt -wasm-disable-explicit-locals -wasm-keep-registers -verify-machineinstrs | FileCheck %s --check-prefix=LINUX64-FNATTR32
 
 ; Test varargs constructs.
 
@@ -106,6 +109,10 @@ declare void @callee(...)
 ; CHECK:      i[[PTR]].const $push0=, 0
 ; CHECK-NEXT: call callee, $pop0
 ; CHECK-NEXT: return{{$}}
+; LINUX64-LABEL: caller_none:
+; LINUX64: i64.const $push0=, 0
+; LINUX64-NEXT: call callee, $pop0
+; LINUX64-NEXT: return{{$}}
 define void @caller_none() {
   call void (...) @callee()
   ret void
@@ -119,10 +126,63 @@ define void @caller_none() {
 ; CHECK-LABEL: caller_some
 ; CHECK-DAG: i32.store
 ; CHECK-DAG: i64.store
+; LINUX64-LABEL: caller_some
+; LINUX64-DAG: i64.store
+; LINUX64-DAG: i64.store
 define void @caller_some() {
   call void (...) @callee(i32 0, double 2.0)
   ret void
 }
+
+; CHECK-LABEL: caller_ints:
+; CHECK-DAG: i32.store 12
+; CHECK-DAG: i32.store 8
+; CHECK-DAG: i32.store 4
+; CHECK-DAG: i32.store 0
+; LINUX64-LABEL: caller_ints:
+; LINUX64-DAG: i64.extend_i32_u
+; LINUX64-DAG: i64.extend_i32_u
+; LINUX64-DAG: i64.extend_i32_u
+; LINUX64-DAG: i64.extend_i32_u
+; LINUX64-DAG: i64.store 24
+; LINUX64-DAG: i64.store 16
+; LINUX64-DAG: i64.store 8
+; LINUX64-DAG: i64.store 0
+define void @caller_ints(i32 %a, i32 %b, i32 %c, i32 %d) {
+  call void (...) @callee(i32 %a, i32 %b, i32 %c, i32 %d)
+  ret void
+}
+
+; Function attributes preserve the ABI if LTO changes the module triple.
+; LINUX64-FNATTR-LABEL: caller_ints_fnattr:
+; LINUX64-FNATTR-DAG: i64.extend_i32_u
+; LINUX64-FNATTR-DAG: i64.extend_i32_u
+; LINUX64-FNATTR-DAG: i64.extend_i32_u
+; LINUX64-FNATTR-DAG: i64.extend_i32_u
+; LINUX64-FNATTR-DAG: i64.store 24
+; LINUX64-FNATTR-DAG: i64.store 16
+; LINUX64-FNATTR-DAG: i64.store 8
+; LINUX64-FNATTR-DAG: i64.store 0
+define void @caller_ints_fnattr(i32 %a, i32 %b, i32 %c, i32 %d) "wasm-varargs-abi"="linux64" {
+  call void (...) @callee(i32 %a, i32 %b, i32 %c, i32 %d)
+  ret void
+}
+
+; A hand-written attribute cannot enable the wasm64 ABI on wasm32.
+; LINUX64-FNATTR32-LABEL: caller_ints_fnattr:
+; LINUX64-FNATTR32-DAG: i32.store 12
+; LINUX64-FNATTR32-DAG: i32.store 8
+; LINUX64-FNATTR32-DAG: i32.store 4
+; LINUX64-FNATTR32-DAG: i32.store 0
+
+; i32 occupies the first 8-byte slot; fp128 retains its 16-byte alignment.
+; LINUX64-LABEL: call_fp128_alignment:
+; LINUX64: i64.const 24
+; LINUX64: i64.store
+; LINUX64: i64.store
+; LINUX64: i64.extend_i32_u
+; LINUX64: i64.store
+; LINUX64: call callee,
 
 ; Test a va_start call in a non-entry block
 ; CHECK-LABEL: startbb:
@@ -200,7 +260,7 @@ define void @nonlegal_fixed(fp128 %x, ...) nounwind {
 ; UNKNOWN-NEXT: call            callee, $1
 define void @call_fp128_alignment(ptr %p) {
 entry:
-  call void (...) @callee(i8 7, fp128 0xL00000000000000018000000000000000)
+  call void (...) @callee(i32 7, fp128 0xL00000000000000018000000000000000)
   ret void
 }
 

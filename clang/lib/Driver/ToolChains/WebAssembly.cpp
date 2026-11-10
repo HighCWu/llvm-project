@@ -500,6 +500,11 @@ bool WebAssembly::HasNativeLLVMSupport() const { return true; }
 void WebAssembly::addClangTargetOptions(const ArgList &DriverArgs,
                                         ArgStringList &CC1Args,
                                         Action::OffloadKind) const {
+  if (const Arg *A = DriverArgs.getLastArg(options::OPT_mabi_EQ)) {
+    CC1Args.push_back("-target-abi");
+    CC1Args.push_back(A->getValue());
+  }
+
   if (!DriverArgs.hasFlag(options::OPT_fuse_init_array,
                           options::OPT_fno_use_init_array, true))
     CC1Args.push_back("-fno-use-init-array");

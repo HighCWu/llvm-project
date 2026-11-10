@@ -43,6 +43,14 @@ static constexpr llvm::StringLiteral ValidCPUNames[] = {
 StringRef WebAssemblyTargetInfo::getABI() const { return ABI; }
 
 bool WebAssemblyTargetInfo::setABI(const std::string &Name) {
+  if (Name == "linux64") {
+    if (getTriple().getArch() != llvm::Triple::wasm64 ||
+        getTriple().getOS() != llvm::Triple::Linux)
+      return false;
+    ABI = Name;
+    return true;
+  }
+
   if (Name != "mvp" && Name != "experimental-mv")
     return false;
 

@@ -34,6 +34,7 @@ class WebAssemblyTargetMachine final : public CodeGenTargetMachineImpl {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
   mutable StringMap<std::unique_ptr<WebAssemblySubtarget>> SubtargetMap;
   bool UsesMultivalueABI = false;
+  bool UsesLinux64VarArgsABI = false;
 
 public:
   WebAssemblyTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
@@ -74,6 +75,7 @@ public:
                                 SMRange &SourceRange) const override;
 
   bool usesMultivalueABI() const { return UsesMultivalueABI; }
+  bool usesLinux64VarArgsABI() const { return UsesLinux64VarArgsABI; }
 };
 
 } // end namespace llvm

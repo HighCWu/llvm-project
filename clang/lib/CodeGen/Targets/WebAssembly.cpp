@@ -46,10 +46,13 @@ private:
 };
 
 class WebAssemblyTargetCodeGenInfo final : public TargetCodeGenInfo {
+  bool UsesLinux64VarArgsABI;
+
 public:
   explicit WebAssemblyTargetCodeGenInfo(CodeGen::CodeGenTypes &CGT,
                                         WebAssemblyABIKind K)
-      : TargetCodeGenInfo(std::make_unique<WebAssemblyABIInfo>(CGT, K)) {
+      : TargetCodeGenInfo(std::make_unique<WebAssemblyABIInfo>(CGT, K)),
+        UsesLinux64VarArgsABI(K == WebAssemblyABIKind::Linux64) {
     SwiftInfo =
         std::make_unique<SwiftABIInfo>(CGT, /*SwiftErrorInRegister=*/false);
   }
@@ -57,6 +60,10 @@ public:
   void setTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
                            CodeGen::CodeGenModule &CGM) const override {
     TargetCodeGenInfo::setTargetAttributes(D, GV, CGM);
+    if (UsesLinux64VarArgsABI)
+      if (auto *Fn = dyn_cast<llvm::Function>(GV))
+        Fn->addFnAttr("wasm-varargs-abi", "linux64");
+
     if (const auto *FD = dyn_cast_or_null<FunctionDecl>(D)) {
       if (const auto *Attr = FD->getAttr<WebAssemblyImportModuleAttr>()) {
         llvm::Function *Fn = cast<llvm::Function>(GV);
@@ -160,10 +167,12 @@ RValue WebAssemblyABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
   bool IsIndirect = isAggregateTypeForABI(Ty) &&
                     !isEmptyRecord(getContext(), Ty, true) &&
                     !isSingleElementStruct(Ty, getContext());
+  CharUnits SlotSize = Kind == WebAssemblyABIKind::Linux64
+                           ? CharUnits::fromQuantity(8)
+                           : CharUnits::fromQuantity(4);
   return emitVoidPtrVAArg(CGF, VAListAddr, Ty, IsIndirect,
                           getContext().getTypeInfoInChars(Ty),
-                          CharUnits::fromQuantity(4),
-                          /*AllowHigherAlign=*/true, Slot);
+                          SlotSize, /*AllowHigherAlign=*/true, Slot);
 }
 
 std::unique_ptr<TargetCodeGenInfo>
