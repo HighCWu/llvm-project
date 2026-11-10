@@ -6,10 +6,15 @@ target triple = "wasm32-unknown-unknown"
 ; CHECK-LABEL: clear_cache:
 ; CHK32-NEXT: .functype clear_cache (i32, i32, i32, i32) -> ()
 ; CHK64-NEXT: .functype clear_cache (i64, i64, i64, i64) -> ()
+; CHECK-NOT: {{^[[:space:]]*(return_)?call(_[[:alnum:]_]+)?([[:space:]]|$)}}
+; CHECK-NOT: i32.store
 ; CHECK: i32.store
-; CHECK-NOT: call
+; CHECK-NOT: {{^[[:space:]]*(return_)?call(_[[:alnum:]_]+)?([[:space:]]|$)}}
+; CHECK-NOT: i32.store
 ; CHECK: i32.store
-; CHECK-NOT: call
+; CHECK-NOT: {{^[[:space:]]*(return_)?call(_[[:alnum:]_]+)?([[:space:]]|$)}}
+; CHECK-NOT: i32.store
+; CHECK: end_function
 define void @clear_cache(ptr %before, ptr %begin, ptr %end, ptr %after) {
 entry:
   store volatile i32 1, ptr %before, align 4
