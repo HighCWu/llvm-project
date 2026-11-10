@@ -1771,7 +1771,11 @@ SDValue WebAssemblyTargetLowering::LowerOperation(SDValue Op,
   case ISD::CTTZ:
     return DAG.UnrollVectorOp(Op.getNode());
   case ISD::CLEAR_CACHE:
-    report_fatal_error("llvm.clear_cache is not supported on wasm");
+    // WebAssembly instructions are separate from linear memory. The host
+    // engine manages instruction caches when compiling and publishing modules.
+    // The intrinsic is a no-op on this target, but preserve its chain so that
+    // memory operations before it remain ordered with later operations.
+    return Op.getOperand(0);
   case ISD::SMUL_LOHI:
   case ISD::UMUL_LOHI:
     return LowerMUL_LOHI(Op, DAG);
