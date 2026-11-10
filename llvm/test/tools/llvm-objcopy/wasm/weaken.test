@@ -13,6 +13,14 @@
 # RUN: llvm-objcopy --weaken %t.a %t.weakened.a
 # RUN: llvm-ar p %t.weakened.a > %t.member.o
 # RUN: obj2yaml %t.member.o | FileCheck %s --check-prefix=ARCHIVE
+# RUN: llvm-objcopy --weaken-symbol=strong_data %t.a %t.named.a
+# RUN: llvm-ar p %t.named.a > %t.named.member.o
+# RUN: obj2yaml %t.named.member.o | FileCheck %s --check-prefix=ARCHIVE-NAMED
+# RUN: llvm-objcopy --weaken-symbols=%t.symbols %t.a %t.list.a
+# RUN: llvm-ar p %t.list.a > %t.list.member.o
+# RUN: obj2yaml %t.list.member.o | FileCheck %s --check-prefix=ARCHIVE-LIST
+# RUN: not llvm-objcopy --localize-symbol=strong_data %t.o %t.localized.o \
+# RUN:   2>&1 | FileCheck %s --check-prefix=UNSUPPORTED
 
 # ALL: Type: CODE
 # ALL: Relocations:
@@ -50,6 +58,18 @@
 # ARCHIVE: Flags: [ BINDING_WEAK ]
 # ARCHIVE: Name: strong_data
 # ARCHIVE: Flags: [ BINDING_WEAK ]
+
+# ARCHIVE-NAMED: Name: strong_fn
+# ARCHIVE-NAMED: Flags: [  ]
+# ARCHIVE-NAMED: Name: strong_data
+# ARCHIVE-NAMED: Flags: [ BINDING_WEAK ]
+
+# ARCHIVE-LIST: Name: strong_fn
+# ARCHIVE-LIST: Flags: [ BINDING_WEAK ]
+# ARCHIVE-LIST: Name: strong_data
+# ARCHIVE-LIST: Flags: [  ]
+
+# UNSUPPORTED: only flags for section dumping, removal, and addition are supported
 
 --- !WASM
 FileHeader:
