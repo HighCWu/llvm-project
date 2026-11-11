@@ -194,6 +194,10 @@ def allow_undefined: F<"allow-undefined">,
            "This options is equivalent to --import-undefined "
            "and --unresolved-symbols=ignore-all">;
 
+def no_undefined: F<"no-undefined">,
+  HelpText<"Report unresolved symbols as errors and do not automatically "
+           "import undefined functions">;
+
 def import_undefined: F<"import-undefined">,
   HelpText<"Turn undefined symbols into imports where possible">;
 

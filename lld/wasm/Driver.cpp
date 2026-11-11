@@ -26,6 +26,7 @@
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
@@ -481,6 +482,24 @@ static UnresolvedPolicy getUnresolvedSymbolPolicy(opt::InputArgList &args) {
                                      ? UnresolvedPolicy::ReportError
                                      : UnresolvedPolicy::Warn;
 
+  // Preserve the historical --allow-undefined override when --no-undefined
+  // is not present. With --no-undefined, these policy options are ordered:
+  // an explicit later --allow-undefined or --unresolved-symbols can relax the
+  // strict setting, while a later --no-undefined restores it.
+  if (args.hasArg(OPT_no_undefined)) {
+    if (auto *arg = args.getLastArg(OPT_allow_undefined, OPT_no_undefined,
+                                   OPT_unresolved_symbols)) {
+      switch (arg->getOption().getID()) {
+      case OPT_no_undefined:
+        return UnresolvedPolicy::ReportError;
+      case OPT_allow_undefined:
+        return UnresolvedPolicy::Ignore;
+      default:
+        break;
+      }
+    }
+  }
+
   if (auto *arg = args.getLastArg(OPT_unresolved_symbols)) {
     StringRef s = arg->getValue();
     if (s == "ignore-all")
@@ -698,8 +717,28 @@ static void readConfigs(opt::InputArgList &args) {
   }
 
   // Legacy --allow-undefined flag which is equivalent to
-  // --unresolve-symbols=ignore + --import-undefined
-  if (args.hasArg(OPT_allow_undefined)) {
+  // --unresolved-symbols=ignore + --import-undefined. Keep its historical
+  // unconditional override unless --no-undefined opts into ordered policy
+  // handling. In that mode, the last undefined-policy option also determines
+  // whether undefined functions are imported automatically.
+  if (args.hasArg(OPT_no_undefined)) {
+    if (auto *arg = args.getLastArg(OPT_allow_undefined, OPT_no_undefined,
+                                   OPT_import_undefined,
+                                   OPT_unresolved_symbols)) {
+      switch (arg->getOption().getID()) {
+      case OPT_allow_undefined:
+      case OPT_import_undefined:
+        ctx.arg.importUndefined = true;
+        break;
+      case OPT_no_undefined:
+      case OPT_unresolved_symbols:
+        ctx.arg.importUndefined = false;
+        break;
+      default:
+        llvm_unreachable("unexpected undefined-symbol option");
+      }
+    }
+  } else if (args.hasArg(OPT_allow_undefined)) {
     ctx.arg.importUndefined = true;
     ctx.arg.unresolvedSymbols = UnresolvedPolicy::Ignore;
   }

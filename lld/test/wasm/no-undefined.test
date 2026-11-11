@@ -1,0 +1,57 @@
+# RUN: split-file %s %t
+# RUN: llvm-mc -filetype=obj -triple=wasm32-unknown-unknown %t/resolved.s -o %t/resolved.o
+# RUN: llvm-mc -filetype=obj -triple=wasm32-unknown-unknown %t/undefined.s -o %t/undefined.o
+# RUN: llvm-mc -filetype=obj -triple=wasm32-unknown-unknown %t/explicit-import.s -o %t/explicit-import.o
+
+# A resolved link remains successful with the GNU-compatible strict option.
+# RUN: wasm-ld --no-undefined %t/resolved.o -o %t/resolved.wasm
+
+# An ordinary undefined function is an error, not an implicit import.
+# RUN: not wasm-ld --no-undefined %t/undefined.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=STRICT
+# STRICT: error: {{.*}}undefined.o: undefined symbol: missing_function
+
+# --no-undefined and --allow-undefined follow command-line order.
+# RUN: not wasm-ld --allow-undefined --no-undefined %t/undefined.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=STRICT
+# RUN: wasm-ld --no-undefined --allow-undefined %t/undefined.o -o %t/allow-after-strict.wasm
+# RUN: obj2yaml %t/allow-after-strict.wasm | FileCheck %s --check-prefix=ALLOW
+# A later explicit policy supersedes the allow-undefined bundle.
+# RUN: not wasm-ld --no-undefined --allow-undefined --unresolved-symbols=report-all %t/undefined.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=STRICT
+# Without the new strict option, preserve the legacy unconditional allow override.
+# RUN: wasm-ld --allow-undefined --unresolved-symbols=report-all %t/undefined.o -o %t/legacy-allow.wasm
+# ALLOW: - Type:            IMPORT
+# ALLOW:   - Module:          env
+# ALLOW:     Field:           missing_function
+
+# The last explicit unresolved-symbol policy also wins relative to strict.
+# RUN: not wasm-ld --unresolved-symbols=ignore-all --no-undefined %t/undefined.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=STRICT
+# RUN: wasm-ld --no-undefined --unresolved-symbols=ignore-all %t/undefined.o -o %t/ignore-after-strict.wasm
+
+# Explicit object import metadata remains valid under strict unresolved handling.
+# RUN: wasm-ld --no-undefined %t/explicit-import.o -o %t/explicit-import.wasm
+# RUN: obj2yaml %t/explicit-import.wasm | FileCheck %s --check-prefix=EXPLICIT
+# EXPLICIT: - Module:          host_api
+# EXPLICIT:   Field:           imported_function
+
+#--- resolved.s
+.globl _start
+_start:
+  .functype _start () -> ()
+  end_function
+
+#--- undefined.s
+.functype missing_function () -> ()
+.globl _start
+_start:
+  .functype _start () -> ()
+  call missing_function
+  end_function
+
+#--- explicit-import.s
+.functype imported_function () -> ()
+.import_module imported_function, host_api
+.import_name imported_function, imported_function
+.globl _start
+_start:
+  .functype _start () -> ()
+  call imported_function
+  end_function
