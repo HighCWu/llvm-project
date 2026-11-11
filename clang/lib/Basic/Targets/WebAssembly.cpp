@@ -48,6 +48,8 @@ bool WebAssemblyTargetInfo::setABI(const std::string &Name) {
         getTriple().getOS() != llvm::Triple::Linux)
       return false;
     ABI = Name;
+    Int64Type = SignedLong;
+    IntMaxType = SignedLong;
     return true;
   }
 
@@ -55,6 +57,8 @@ bool WebAssemblyTargetInfo::setABI(const std::string &Name) {
     return false;
 
   ABI = Name;
+  Int64Type = SignedLongLong;
+  IntMaxType = SignedLongLong;
   return true;
 }
 
@@ -93,6 +97,8 @@ void WebAssemblyTargetInfo::fillValidCPUList(
 void WebAssemblyTargetInfo::getTargetDefines(const LangOptions &Opts,
                                              MacroBuilder &Builder) const {
   defineCPUMacros(Builder, "wasm", /*Tuning=*/false);
+  if (ABI == "linux64")
+    Builder.defineMacro("__wasm_linux64__", "1");
   if (HasAtomics)
     Builder.defineMacro("__wasm_atomics__");
   if (HasBulkMemory)
