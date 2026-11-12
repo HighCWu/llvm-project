@@ -14,6 +14,7 @@
 #include "SymbolTable.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/Reproduce.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/Wasm.h"
 #include "llvm/Object/Binary.h"
 #include "llvm/Object/Wasm.h"
@@ -443,7 +444,8 @@ bool SharedFile::parse() {
     for (const SymbolRef &sym : wasmObj->symbols()) {
       const WasmSymbol &wasmSym =
           wasmObj->getWasmSymbol(sym.getRawDataRefImpl());
-      if (!wasmSym.isDefined() || isDylinkLocal(wasmSym.Info.Name))
+      if (!wasmSym.isDefined() || wasmSym.isBindingLocal() ||
+          isDylinkLocal(wasmSym.Info.Name))
         continue;
       if (wasmSym.isTypeFunction() || wasmSym.isTypeData())
         definitions.insert(wasmSym.Info.Name);
@@ -462,22 +464,111 @@ bool SharedFile::parse() {
       regularReason = true;
     }
 
+    auto candidateProvidesUnboundSymbol = [&](StringRef name) {
+      if (!definitions.contains(name))
+        return false;
+      Symbol *existing = symtab->find(name);
+      return !existing || (!existing->isShared() && !existing->isDefined());
+    };
+
     for (SharedFile *prior : ctx.sharedFiles) {
-      for (const SymbolRef &sym : prior->getWasmObj()->symbols()) {
+      const WasmObjectFile &priorObject = *prior->getWasmObj();
+
+      struct ImportedSymbol {
+        StringRef Name;
+        uint8_t Kind;
+        bool Weak;
+      };
+      using ImportKey = std::pair<StringRef, StringRef>;
+      DenseMap<ImportKey, SmallVector<ImportedSymbol, 1>> importsByPair;
+      DenseMap<StringRef, SmallVector<ImportedSymbol, 1>> importsByName;
+      DenseSet<ImportKey> weakImportsByPair;
+      DenseSet<StringRef> weakImportsByName;
+      DenseSet<StringRef> localDefinitions;
+
+      // Keep import-to-symbol aliases when the linking symbol table has them.
+      // Some strong dynamic imports have no undefined symbol entry, so the
+      // Wasm import field remains the fallback name below.
+      for (const SymbolRef &sym : priorObject.symbols()) {
         const WasmSymbol &wasmSym =
-            prior->getWasmObj()->getWasmSymbol(sym.getRawDataRefImpl());
-        if (!wasmSym.isUndefined() || wasmSym.isBindingWeak() ||
-            wasmSym.isBindingLocal() ||
+            priorObject.getWasmSymbol(sym.getRawDataRefImpl());
+        if (wasmSym.isDefined() && wasmSym.isBindingLocal())
+          localDefinitions.insert(wasmSym.Info.Name);
+        if (!wasmSym.isUndefined() || wasmSym.isBindingLocal() ||
             (!wasmSym.isTypeFunction() && !wasmSym.isTypeData()))
           continue;
 
-        if (!definitions.contains(wasmSym.Info.Name))
+        ImportedSymbol imported{wasmSym.Info.Name, wasmSym.Info.Kind,
+                                wasmSym.isBindingWeak()};
+        ImportKey key{wasmSym.Info.ImportModule.value_or(defaultModule),
+                      wasmSym.Info.ImportName.value_or(wasmSym.Info.Name)};
+        importsByPair[key].push_back(imported);
+        importsByName[wasmSym.Info.Name].push_back(imported);
+      }
+
+      // dylink.0 currently records weak imports only. Direct imports use the
+      // original module/name pair; GOT imports use the symbol name instead of
+      // that synthetic import module.
+      for (const WasmDylinkImportInfo &info :
+           priorObject.dylinkInfo().ImportInfo) {
+        if ((info.Flags & WASM_SYMBOL_BINDING_MASK) != WASM_SYMBOL_BINDING_WEAK)
+          continue;
+        weakImportsByPair.insert({info.Module, info.Field});
+        weakImportsByName.insert(info.Field);
+      }
+
+      for (const WasmImport &import : priorObject.imports()) {
+        uint8_t symbolKind;
+        bool isGOTImport = false;
+        if (import.Kind == WASM_EXTERNAL_FUNCTION) {
+          symbolKind = WASM_SYMBOL_TYPE_FUNCTION;
+        } else if (import.Kind == WASM_EXTERNAL_GLOBAL &&
+                   import.Module == "GOT.mem") {
+          // Data symbols are represented by synthetic GOT.mem globals.
+          symbolKind = WASM_SYMBOL_TYPE_DATA;
+          isGOTImport = true;
+        } else if (import.Kind == WASM_EXTERNAL_GLOBAL &&
+                   import.Module == "GOT.func") {
+          // Function-address references are represented by GOT.func globals.
+          symbolKind = WASM_SYMBOL_TYPE_FUNCTION;
+          isGOTImport = true;
+        } else {
+          // Do not treat memory/table imports, tags, or ordinary environment
+          // globals such as __memory_base as unresolved DSO symbols.
+          continue;
+        }
+
+        if (isGOTImport && localDefinitions.contains(import.Field))
           continue;
 
-        Symbol *existing = symtab->find(wasmSym.Info.Name);
-        if (existing && (existing->isShared() || existing->isDefined()))
-          continue;
-        transitiveReason = true;
+        bool foundMatchingSymbol = false;
+        const SmallVector<ImportedSymbol, 1> *matches = nullptr;
+        if (isGOTImport) {
+          auto it = importsByName.find(import.Field);
+          if (it != importsByName.end())
+            matches = &it->second;
+        } else {
+          auto it = importsByPair.find({import.Module, import.Field});
+          if (it != importsByPair.end())
+            matches = &it->second;
+        }
+        if (matches) {
+          for (const ImportedSymbol &imported : *matches) {
+            if (imported.Kind != symbolKind)
+              continue;
+            foundMatchingSymbol = true;
+            if (!imported.Weak && candidateProvidesUnboundSymbol(imported.Name))
+              transitiveReason = true;
+          }
+        }
+        if (!foundMatchingSymbol) {
+          bool weak =
+              isGOTImport
+                  ? weakImportsByName.contains(import.Field)
+                  : weakImportsByPair.contains({import.Module, import.Field});
+          if (!weak && candidateProvidesUnboundSymbol(import.Field))
+            transitiveReason = true;
+        }
       }
     }
 
