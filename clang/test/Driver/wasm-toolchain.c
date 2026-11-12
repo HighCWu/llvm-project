@@ -138,6 +138,44 @@
 // RUN:  | FileCheck -check-prefix=WASM_EXCEPTIONS %s
 // WASM_EXCEPTIONS: "-cc1" {{.*}} "-target-feature" "+exception-handling" "-target-feature" "+multivalue" "-target-feature" "+reference-types" "-exception-model=wasm" "-mllvm" "-wasm-enable-eh"
 
+// The LTO backend runs inside wasm-ld and needs the Wasm exception model too.
+// This applies both to ThinLTO and to bitcode inputs linked without -flto.
+// RUN: %clang -### --target=wasm32-unknown-unknown --sysroot=/foo %s \
+// RUN:   -fwasm-exceptions -flto=thin 2>&1 \
+// RUN:   | FileCheck -check-prefix=WASM_EXCEPTIONS_THINLTO %s
+// WASM_EXCEPTIONS_THINLTO: wasm-ld{{.*}}" "-m" "wasm32"
+// WASM_EXCEPTIONS_THINLTO-SAME: "-mllvm" "-exception-model=wasm" "-mllvm" "-wasm-enable-eh"
+
+// RUN: %clang --target=wasm32-unknown-unknown --sysroot=/foo \
+// RUN:   -fwasm-exceptions -emit-llvm -c %s -o %t.bc
+// RUN: %clang -### --target=wasm32-unknown-unknown --sysroot=/foo %t.bc \
+// RUN:   -fwasm-exceptions 2>&1 \
+// RUN:   | FileCheck -check-prefix=WASM_EXCEPTIONS_BITCODE %s
+// WASM_EXCEPTIONS_BITCODE: wasm-ld{{.*}}" "-m" "wasm32"
+// WASM_EXCEPTIONS_BITCODE-SAME: "-mllvm" "-exception-model=wasm" "-mllvm" "-wasm-enable-eh"
+
+// Keep the memory64 linker backend configured as well.
+// RUN: %clang -### --target=wasm64-unknown-unknown --sysroot=/foo %s \
+// RUN:   -fwasm-exceptions -flto=thin 2>&1 \
+// RUN:   | FileCheck -check-prefix=WASM64_EXCEPTIONS_THINLTO %s
+// WASM64_EXCEPTIONS_THINLTO: wasm-ld{{.*}}" "-m" "wasm64"
+// WASM64_EXCEPTIONS_THINLTO-SAME: "-mllvm" "-exception-model=wasm" "-mllvm" "-wasm-enable-eh"
+
+// A normal link has no Wasm EH backend overrides.
+// RUN: %clang -### --target=wasm32-unknown-unknown --sysroot=/foo %s 2>&1 \
+// RUN:   | FileCheck -check-prefix=WASM_NO_EXCEPTIONS %s
+// WASM_NO_EXCEPTIONS: wasm-ld
+// WASM_NO_EXCEPTIONS-NOT: "-exception-model=wasm"
+// WASM_NO_EXCEPTIONS-NOT: "-wasm-enable-eh"
+
+// Compile-only jobs retain their cc1 EH options without creating a link job.
+// RUN: %clang -### -c --target=wasm32-unknown-unknown --sysroot=/foo %s \
+// RUN:   -fwasm-exceptions 2>&1 \
+// RUN:   | FileCheck -check-prefix=WASM_EXCEPTIONS_COMPILE %s
+// WASM_EXCEPTIONS_COMPILE-NOT: wasm-ld
+// WASM_EXCEPTIONS_COMPILE: "-cc1" {{.*}} "-exception-model=wasm" "-mllvm" "-wasm-enable-eh"
+// WASM_EXCEPTIONS_COMPILE-NOT: wasm-ld
+
 // '-fwasm-exceptions' not allowed with
 // '-mllvm -enable-emscripten-cxx-exceptions'
 // RUN: not %clang -### --target=wasm32-unknown-unknown \

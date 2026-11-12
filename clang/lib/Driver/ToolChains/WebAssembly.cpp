@@ -221,6 +221,18 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   Args.addAllArgs(CmdArgs, {options::OPT_L, options::OPT_u});
 
+  // Keep the LTO backend's exception model and Wasm EH feature enabled when
+  // linking bitcode with -fwasm-exceptions. The compile action's cc1 options
+  // do not configure the backend that wasm-ld invokes for LTO.
+  if (const Arg *WasmExceptionsArg =
+          Args.getLastArg(options::OPT_fwasm_exceptions)) {
+    WasmExceptionsArg->claim();
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-exception-model=wasm");
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-wasm-enable-eh");
+  }
+
   ToolChain.AddFilePathLibArgs(Args, CmdArgs);
 
   bool IsCommand = true;
