@@ -154,7 +154,13 @@ class SharedFile : public WasmFileBase {
 public:
   explicit SharedFile(MemoryBufferRef m) : WasmFileBase(SharedKind, m) {}
 
-  void parse();
+  bool parse();
+
+  // These flags are captured by the driver at the input's position. A shared
+  // file selected only to satisfy another shared file's import need not be
+  // listed as a direct dependency when that dependency is already transitive.
+  bool asNeeded = false;
+  bool emitInNeeded = true;
 
   static bool classof(const InputFile *f) { return f->kind() == SharedKind; }
 };

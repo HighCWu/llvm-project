@@ -72,11 +72,15 @@ void DylinkSection::writeBody() {
     sub.writeTo(os);
   }
 
-  if (ctx.sharedFiles.size()) {
+  size_t numNeeded = 0;
+  for (auto *so : ctx.sharedFiles)
+    numNeeded += so->emitInNeeded;
+  if (numNeeded) {
     SubSection sub(WASM_DYLINK_NEEDED);
-    writeUleb128(sub.os, ctx.sharedFiles.size(), "Needed");
+    writeUleb128(sub.os, numNeeded, "Needed");
     for (auto *so : ctx.sharedFiles)
-      writeStr(sub.os, llvm::sys::path::filename(so->getName()), "so name");
+      if (so->emitInNeeded)
+        writeStr(sub.os, llvm::sys::path::filename(so->getName()), "so name");
     sub.writeTo(os);
   }
 

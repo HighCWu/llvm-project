@@ -41,8 +41,8 @@ void SymbolTable::addFile(InputFile *file, StringRef symName) {
   if (auto *f = dyn_cast<SharedFile>(file)) {
     // If we are not reporting undefined symbols that we don't actualy
     // parse the shared library symbol table.
-    f->parse();
-    ctx.sharedFiles.push_back(f);
+    if (f->parse())
+      ctx.sharedFiles.push_back(f);
     return;
   }
 

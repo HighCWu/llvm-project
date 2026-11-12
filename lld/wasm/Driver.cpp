@@ -109,6 +109,10 @@ private:
   // True if we are in --whole-archive and --no-whole-archive.
   bool inWholeArchive = false;
 
+  // True if shared libraries are only retained when needed by an earlier
+  // input. The setting is captured on each SharedFile as it is added.
+  bool asNeeded = false;
+
   // True if we are in --start-lib and --end-lib.
   bool inLib = false;
 
@@ -319,6 +323,8 @@ void LinkerDriver::addFile(StringRef path) {
     if (inWholeArchive) {
       for (const auto &[m, offset] : members) {
         auto *object = createObjectFile(m, path, offset);
+        if (auto *shared = dyn_cast<SharedFile>(object))
+          shared->asNeeded = asNeeded;
         files.push_back(object);
       }
 
@@ -330,11 +336,16 @@ void LinkerDriver::addFile(StringRef path) {
 
     for (const auto &[m, offset] : members) {
       auto magic = identify_magic(m.getBuffer());
-      if (magic == file_magic::wasm_object || magic == file_magic::bitcode)
-        files.push_back(createObjectFile(m, path, offset, true));
-      else
+      if (magic == file_magic::wasm_object || magic == file_magic::bitcode) {
+        if (auto *object = createObjectFile(m, path, offset, true)) {
+          if (auto *shared = dyn_cast<SharedFile>(object))
+            shared->asNeeded = asNeeded;
+          files.push_back(object);
+        }
+      } else {
         warn(path + ": archive member '" + m.getBufferIdentifier() +
              "' is neither Wasm object file nor LLVM bitcode");
+      }
     }
 
     return;
@@ -342,6 +353,8 @@ void LinkerDriver::addFile(StringRef path) {
   case file_magic::bitcode:
   case file_magic::wasm_object: {
     auto obj = createObjectFile(mbref, "", 0, inLib);
+    if (auto *shared = dyn_cast<SharedFile>(obj))
+      shared->asNeeded = asNeeded;
     if (ctx.arg.isStatic && isa<SharedFile>(obj)) {
       error("attempted static link of dynamic object " + path);
       break;
@@ -410,6 +423,12 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
     case OPT_Bdynamic:
       if (!ctx.arg.relocatable)
         ctx.arg.isStatic = false;
+      break;
+    case OPT_as_needed:
+      asNeeded = true;
+      break;
+    case OPT_no_as_needed:
+      asNeeded = false;
       break;
     case OPT_whole_archive:
       inWholeArchive = true;

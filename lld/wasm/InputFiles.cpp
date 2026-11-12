@@ -429,8 +429,78 @@ ObjFile::ObjFile(MemoryBufferRef m, StringRef archiveName, bool lazy)
     markLive();
 }
 
-void SharedFile::parse() {
+bool SharedFile::parse() {
   assert(wasmObj->isSharedObject());
+
+  if (asNeeded) {
+    DenseSet<StringRef> definitions;
+    auto isDylinkLocal = [](StringRef name) {
+      return name == "__wasm_apply_data_relocs" ||
+             name == "__wasm_call_ctors" || name.starts_with("__start_") ||
+             name.starts_with("__stop_");
+    };
+
+    for (const SymbolRef &sym : wasmObj->symbols()) {
+      const WasmSymbol &wasmSym =
+          wasmObj->getWasmSymbol(sym.getRawDataRefImpl());
+      if (!wasmSym.isDefined() || isDylinkLocal(wasmSym.Info.Name))
+        continue;
+      if (wasmSym.isTypeFunction() || wasmSym.isTypeData())
+        definitions.insert(wasmSym.Info.Name);
+    }
+
+    bool regularReason = false;
+    bool transitiveReason = false;
+    for (StringRef name : definitions) {
+      Symbol *sym = symtab->find(name);
+      if (!sym || !sym->isUndefined() || sym->isWeak() || sym->isLocal() ||
+          sym->isShared())
+        continue;
+      InputFile *refFile = sym->getFile();
+      if (!refFile || refFile->kind() == InputFile::SharedKind)
+        continue;
+      regularReason = true;
+    }
+
+    for (SharedFile *prior : ctx.sharedFiles) {
+      for (const SymbolRef &sym : prior->getWasmObj()->symbols()) {
+        const WasmSymbol &wasmSym =
+            prior->getWasmObj()->getWasmSymbol(sym.getRawDataRefImpl());
+        if (!wasmSym.isUndefined() || wasmSym.isBindingWeak() ||
+            wasmSym.isBindingLocal() ||
+            (!wasmSym.isTypeFunction() && !wasmSym.isTypeData()))
+          continue;
+
+        if (!definitions.contains(wasmSym.Info.Name))
+          continue;
+
+        Symbol *existing = symtab->find(wasmSym.Info.Name);
+        if (existing && (existing->isShared() || existing->isDefined()))
+          continue;
+        transitiveReason = true;
+      }
+    }
+
+    if (!regularReason && !transitiveReason)
+      return false;
+
+    StringRef candidateName = path::filename(getName());
+    bool alreadyNeededTransitively = false;
+    for (SharedFile *prior : ctx.sharedFiles) {
+      for (StringRef needed : prior->getWasmObj()->dylinkInfo().Needed) {
+        if (path::filename(needed) == candidateName) {
+          alreadyNeededTransitively = true;
+          break;
+        }
+      }
+      if (alreadyNeededTransitively)
+        break;
+    }
+
+    // A regular input always creates a direct dependency. A DSO selected only
+    // for a prior DSO's import can rely on that DSO's Needed entry.
+    emitInNeeded = regularReason || !alreadyNeededTransitively;
+  }
 
   for (const SymbolRef &sym : wasmObj->symbols()) {
     const WasmSymbol &wasmSym = wasmObj->getWasmSymbol(sym.getRawDataRefImpl());
@@ -459,6 +529,7 @@ void SharedFile::parse() {
       symbols.push_back(s);
     }
   }
+  return true;
 }
 
 // Returns the alignment for a custom section. This is used to concatenate
