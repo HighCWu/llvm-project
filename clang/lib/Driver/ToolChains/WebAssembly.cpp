@@ -209,6 +209,12 @@ void wasm::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasArg(options::OPT_s))
     CmdArgs.push_back("--strip-all");
 
+  // Match the standard driver meaning of -rdynamic for Wasm linkers.
+  // Relocatable links do not produce a dynamic symbol table.
+  Args.ClaimAllArgs(options::OPT_rdynamic);
+  if (Args.hasArg(options::OPT_rdynamic) && !Args.hasArg(options::OPT_r))
+    CmdArgs.push_back("--export-dynamic");
+
   // On `wasip2` the default linker is `wasm-component-ld` which wraps the
   // execution of `wasm-ld`. Find `wasm-ld` and pass it as an argument of where
   // to find it to avoid it needing to hunt and rediscover or search `PATH` for
